@@ -24,17 +24,14 @@ como una app. Usa **el mismo servidor y la misma hoja de cálculo** que la app d
   desde el iPhone quedan *Por revisar*; para el iPhone conviene usar *Solo ubicación* o *Código QR*.
 - Los **recordatorios programados** (15 min antes de la entrada, etc.): por ahora solo existen en Android.
 
-## Cómo publicarla (gratis, desde Windows)
+## Dónde está publicada
 
-La carpeta `web` se publica en **GitHub Pages**:
+La carpeta `web` se publica sola en **GitHub Pages** desde el repositorio del proyecto:
 
-1. Crea una cuenta gratis en <https://github.com>.
-2. Toca **+ → New repository**. Nombre: `meson-asiste`. Déjalo en **Public**. Toca **Create repository**.
-3. En la página del repositorio toca **uploading an existing file**.
-4. Abre la carpeta `web` en el Explorador de Windows, selecciona **todo lo que está adentro** (no la carpeta misma,
-   también las carpetas `iconos` y `vendor`) y arrástralo a la página. Toca **Commit changes**.
-5. Ve a **Settings → Pages**. En *Source* elige **Deploy from a branch**, rama **main**, carpeta **/ (root)**, y toca **Save**.
-6. Espera 1 o 2 minutos. Tu app queda en: `https://TU-USUARIO.github.io/meson-asiste/`
+**https://wyecg28-ops.github.io/meson-asiste/**
+
+Cada vez que se suben cambios de la carpeta `web` (`git push`), GitHub la vuelve a publicar en 1 o 2 minutos
+(archivo `.github/workflows/pages.yml`). El avance se ve en la pestaña **Actions** del repositorio.
 
 ## Cómo instalarla en el iPhone
 
@@ -50,6 +47,6 @@ En Android también funciona: en Chrome aparece el botón **Instalar**.
   al iPhone (o al revés), el administrador debe tocar **Liberar teléfono** en *Admin → Miembros*.
 - No borrar los datos de Safari ni quitar la app de la pantalla de inicio: el teléfono perdería su registro y habría
   que liberarlo de nuevo.
-- Para actualizar la web: sube los archivos cambiados al repositorio y cambia el número de `VERSION` en `sw.js`
-  (por ejemplo, de `v1` a `v2`), para que los teléfonos descarguen la nueva versión.
+- Al cambiar la web, sube también el número de `VERSION` en `sw.js` (por ejemplo, de `v1` a `v2`) para que los
+  teléfonos descarguen la nueva versión.
 - La URL del servidor está en `config.js`. Si algún día cambia, cámbiala ahí y en `Config.kt` de Android.
