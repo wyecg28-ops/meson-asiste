@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Paleta del Colegio Mesón -->
+    <color name="granate">#FF6B1412</color>
+    <color name="rojo">#FFA62022</color>
+    <color name="gris">#FF999998</color>
+    <color name="gris_claro">#FFF3F3F3</color>
+    <color name="white">#FFFFFFFF</color>
+</resources>

@@ -1,0 +1,13 @@
+Mesón Asiste
+Copyright 2026 31YC0ND3
+
+Creado por 31YC0ND3.
+
+Este software se distribuye bajo la Licencia Apache, versión 2.0 (ver el archivo LICENSE).
+
+Cualquier copia, adaptación o versión modificada de este proyecto, incluidas las versiones para otras
+plataformas (iOS, web u otras), debe conservar este archivo NOTICE y el aviso "Creado por 31YC0ND3",
+tanto en el código fuente como en la pantalla "Acerca de" de la aplicación, según la sección 4 de la licencia.
+
+
+Este proyecto incluye jsQR (https://github.com/cozmo/jsQR), licencia Apache 2.0, en web/vendor/.

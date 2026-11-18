@@ -1,0 +1,42 @@
+<!doctype html>
+<!--
+  Mesón Asiste — Copyright 2026 31YC0ND3. Creado por 31YC0ND3.
+  Licencia Apache 2.0: ver los archivos LICENSE y NOTICE en la raíz del proyecto.
+-->
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="author" content="31YC0ND3">
+  <meta name="description" content="Control de asistencia del Colegio Mesón.">
+  <meta name="theme-color" content="#A62022">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Mesón Asiste">
+  <title>Mesón Asiste</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/png" href="iconos/icono-192.png">
+  <link rel="apple-touch-icon" href="iconos/apple-touch-icon.png">
+  <link rel="stylesheet" href="estilos.css">
+</head>
+<body>
+  <main id="app" aria-live="polite"></main>
+  <nav id="pestanas" class="pestanas" hidden></nav>
+  <div id="aviso" class="aviso" role="status" hidden></div>
+  <div id="dialogo" class="dialogo-fondo" hidden></div>
+
+  <!-- Lector de QR (cámara) -->
+  <div id="lector" class="lector" hidden>
+    <video id="lector-video" playsinline muted></video>
+    <canvas id="lector-lienzo" hidden></canvas>
+    <div class="lector-marco"></div>
+    <p class="lector-texto">Apunta al código QR de la entrada</p>
+    <button id="lector-cancelar" class="boton secundario lector-cancelar" type="button">Cancelar</button>
+  </div>
+
+  <script src="config.js"></script>
+  <script src="vendor/jsQR.js" defer></script>
+  <script src="app.js" defer></script>
+</body>
+</html>

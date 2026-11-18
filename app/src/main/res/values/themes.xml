@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Fondo granate mientras carga, para que no haya destello blanco antes de la animación. -->
+    <style name="Theme.Asistencia" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/granate</item>
+    </style>
+</resources>

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Pantalla de arranque del sistema (Android 12+) con los colores del colegio. -->
+    <style name="Theme.Asistencia" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/granate</item>
+        <item name="android:windowSplashScreenBackground">@color/granate</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+    </style>
+</resources>

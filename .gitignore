@@ -1,0 +1,28 @@
+*.iml
+.gradle
+/local.properties
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+.kotlin
+/app/build
+/app/release
+# Llaves de firma de Android: nunca se suben.
+*.jks
+*.keystore
+*.p12
+.env
+
+# Datos del teléfono de pruebas de Android Studio
+/.idea/deploymentTargetSelector.xml
+/.idea/deviceManager.xml
+/.idea/AndroidProjectSystem.xml

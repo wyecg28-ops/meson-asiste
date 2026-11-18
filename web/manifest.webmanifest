@@ -1,0 +1,17 @@
+{
+  "name": "Mesón Asiste",
+  "short_name": "Mesón Asiste",
+  "description": "Control de asistencia del Colegio Mesón. Creado por 31YC0ND3.",
+  "lang": "es",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#151313",
+  "theme_color": "#A62022",
+  "icons": [
+    { "src": "iconos/icono-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "iconos/icono-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "iconos/icono-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
