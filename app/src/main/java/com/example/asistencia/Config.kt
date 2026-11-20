@@ -8,6 +8,9 @@ object Config {
     /** URL de la implementación web de Google Apps Script (termina en /exec). */
     const val SCRIPT_URL = "https://script.google.com/macros/s/AKfycbz06fz2gBxS3mUeyDcAzIE33aBgtVnwOj0dNVLBP-wicaLiFgzhAhMvvvJ6fIJc2BdV/exec"
 
+    /** Versión publicada de la app (la app revisa aquí si hay una actualización). */
+    const val ACTUALIZACIONES_URL = "https://wyecg28-ops.github.io/meson-asiste/version.json"
+
     /** Solo se aceptan cuentas de este dominio. */
     const val DOMINIO = "colegiomeson.edu.gt"
 

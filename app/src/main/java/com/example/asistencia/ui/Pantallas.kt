@@ -134,6 +134,10 @@ private fun Contenido(vm: AsistenciaViewModel) {
     }
     // Al volver a la app y cada 3 minutos: envía pendientes y trae los cambios de la hoja de Google y el ranking.
     AlVolverYCada(180_000, estado.correo to estado.listo) { if (estado.listo) vm.refrescar() }
+    // Actualizaciones de la app (sin Google Play): revisa sola al abrir y al volver; si hay una, aparece el aviso.
+    val actualizacion: ActualizacionViewModel = viewModel()
+    AlVolverYCada(30 * 60_000L, Unit) { actualizacion.buscar() }
+    DialogoActualizacion(actualizacion)
     if (pestana !in pestanas) pestana = pestanas.first()
     val accesoCerrado = estado.accesoCerrado != null
 

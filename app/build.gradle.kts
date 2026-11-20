@@ -1,3 +1,12 @@
+import java.util.Properties
+
+// Firma oficial: vive fuera del proyecto (Documentos/MesonAsiste-Firma) y nunca se sube a GitHub.
+// Las actualizaciones solo se instalan si vienen firmadas con la misma firma.
+val firma = Properties().apply {
+    val archivo = file(System.getProperty("user.home") + "/Documents/MesonAsiste-Firma/firma.properties")
+    if (archivo.exists()) archivo.inputStream().use { load(it) }
+}
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -13,14 +22,31 @@ android {
         applicationId = "com.example.asistencia"
         minSdk = 23
         targetSdk = 37
-        versionCode = 1
-        versionName = "1.0"
+        // Subir los dos en cada versión publicada (la app avisa si hay una mayor).
+        versionCode = 2
+        versionName = "1.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        create("oficial") {
+            if (!firma.isEmpty) {
+                storeFile = file(firma.getProperty("storeFile"))
+                storePassword = firma.getProperty("storePassword")
+                keyAlias = firma.getProperty("keyAlias")
+                keyPassword = firma.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
+        // También la versión de Android Studio usa la firma oficial: así no choca con las actualizaciones.
+        debug {
+            if (!firma.isEmpty) signingConfig = signingConfigs.getByName("oficial")
+        }
         release {
+            if (!firma.isEmpty) signingConfig = signingConfigs.getByName("oficial")
             optimization {
                 enable = false
             }
