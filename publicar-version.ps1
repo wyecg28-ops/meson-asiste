@@ -1,4 +1,4 @@
-# Mesón Asiste — Copyright 2026 31YC0ND3. Creado por 31YC0ND3.
+﻿# Mesón Asiste — Copyright 2026 31YC0ND3. Creado por 31YC0ND3.
 # Licencia Apache 2.0: ver los archivos LICENSE y NOTICE en la raíz del proyecto.
 #
 # Publica una versión nueva de la app Android (sin Google Play):
@@ -19,7 +19,7 @@ $gradle = Get-Content 'app\build.gradle.kts' -Raw
 $codigo = [int]([regex]::Match($gradle, 'versionCode\s*=\s*(\d+)').Groups[1].Value)
 $nombre = [regex]::Match($gradle, 'versionName\s*=\s*"([^"]+)"').Groups[1].Value
 $etiqueta = "v$nombre"
-gh release view $etiqueta *> $null
+cmd /c "gh release view $etiqueta >nul 2>&1"
 if ($LASTEXITCODE -eq 0) { throw "La versión $nombre ya fue publicada. Sube versionCode y versionName en app/build.gradle.kts." }
 
 if (-not $env:JAVA_HOME) { $env:JAVA_HOME = 'C:\Program Files\Android\Android Studio\jbr' }
