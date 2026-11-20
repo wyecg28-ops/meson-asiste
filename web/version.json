@@ -1,7 +1,7 @@
 {
-    "versionCode":  3,
-    "versionName":  "1.2",
-    "apk":  "https://github.com/wyecg28-ops/meson-asiste/releases/download/v1.2/MesonAsiste-1.2.apk",
-    "sha256":  "ee006f5d95019476618bf15cec901da846be10ee46f3a66d1ba37d9f4e48a156",
-    "notas":  "Prueba del aviso de actualización automática."
+    "versionCode":  4,
+    "versionName":  "1.3",
+    "apk":  "https://github.com/wyecg28-ops/meson-asiste/releases/download/v1.3/MesonAsiste-1.3.apk",
+    "sha256":  "eeb2c64b9c5ceee219bfd1ea646a6801e3afbb6d38b36ddd77d77a1240b2467c",
+    "notas":  "Carga más rápida: el panel de administración muestra al instante lo último que viste mientras se actualiza."
 }
