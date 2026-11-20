@@ -347,11 +347,40 @@ function turnoActual(ahora) {
   return lista.find(t => turnoAbierto(t, ahora)) || lista.find(t => t.fecha === claveDia(new Date(ahora))) || null;
 }
 
+/** Permisos por horas de un día (del calendario que llega con el perfil). */
+const permisosHoras = clave => eventosDel(clave).filter(porHoras);
+
+/** Minutos de permiso por horas de un día: cuentan para la meta (no como horas trabajadas). */
+function minutosPermisoDe(t) {
+  if (!t) return 0;
+  if (t.permiso != null) return t.permiso;
+  return permisosHoras(t.fecha).reduce((s, e) => s + Math.max(0, aMinutos(e.horaFin) - aMinutos(e.horaInicio)), 0);
+}
+
+/** Minutos de permiso que caen entre la entrada y [fin] (minutos desde la medianoche): no se trabajaron. */
+function permisoDentro(t, fin) {
+  const e = aMinutos(t.entrada);
+  return permisosHoras(t.fecha).reduce((s, p) => {
+    let i = aMinutos(p.horaInicio), f = aMinutos(p.horaFin);
+    if (fin > 1440 && i < e) { i += 1440; f += 1440; }
+    return s + Math.max(0, Math.min(f, fin) - Math.max(i, e));
+  }, 0);
+}
+
 function minutosTrabajados(t, ahora) {
   if (!t || !t.entrada) return 0;
-  if (t.salida) return t.minutos != null ? t.minutos : (aMinutos(t.salida) - aMinutos(t.entrada) + 1440) % 1440;
-  return turnoAbierto(t, ahora) ? Math.round((ahora - inicioTurno(t)) / 60000) : 0;
+  if (t.salida) {
+    if (t.minutos != null) return t.minutos; // ya calculado por el servidor (sin el permiso)
+    const bruto = (aMinutos(t.salida) - aMinutos(t.entrada) + 1440) % 1440;
+    return Math.max(0, bruto - permisoDentro(t, aMinutos(t.entrada) + bruto));
+  }
+  if (!turnoAbierto(t, ahora)) return 0;
+  const bruto = Math.round((ahora - inicioTurno(t)) / 60000);
+  return Math.max(0, bruto - permisoDentro(t, aMinutos(t.entrada) + bruto));
 }
+
+/** Cumplió la meta: lo trabajado más las horas de permiso. */
+const cumpleMeta = t => minutosTrabajados(t, Date.now()) + minutosPermisoDe(t) >= (t.meta || meta());
 
 // ---------------------------------------------------------------- Estadísticas
 
@@ -383,8 +412,8 @@ function estadisticas(periodo) {
     puntualidad: puntuales + tardes ? Math.round(puntuales * 100 / (puntuales + tardes)) : null,
     minutos: completos.reduce((s, d) => s + d.minutos, 0),
     extra: completos.reduce((s, d) => s + (d.extra || 0), 0),
-    metaCumplida: completos.filter(d => d.minutos >= d.meta).length,
-    incompletos: completos.filter(d => d.minutos < d.meta).length,
+    metaCumplida: completos.filter(cumpleMeta).length,
+    incompletos: completos.filter(d => !cumpleMeta(d)).length,
     actividades: delPeriodo.filter(d => d.actividad).length,
     sinSalida: delPeriodo.filter(d => !d.salida && d.fecha < claveDia(hoy)).length,
     racha: actual,
@@ -796,12 +825,12 @@ function mostrarResultado(tipo, respuesta) {
   const t = estado.dias.filter(d => d.salida).sort((a, b) => inicioTurno(b) - inicioTurno(a))[0];
   if (!t) return mostrarDialogo('✅', 'Salida registrada', respuesta.mensaje + nota);
   if (t.actividad) return mostrarDialogo('🧭', 'Jornada con actividad especial', 'Registraste ' + duracion(t.minutos) + '. La dirección revisará estas horas.' + nota);
-  if (t.minutos >= t.meta) {
+  if (cumpleMeta(t)) {
     return mostrarDialogo('🏆', '¡Cumpliste tu meta de ' + duracion(t.meta) + '!', 'Estuviste ' + duracion(t.minutos) + ' en el colegio. ¡Buen trabajo!' +
       (t.extra > 0 ? '\n⏱ Horas extra hoy: ' + duracion(t.extra) + ' (esta semana: ' + duracion(estadisticas('semana').extra) + ').' : '') + nota);
   }
   return mostrarDialogo('⚠️', 'No completaste la meta de ' + duracion(t.meta), 'Salida con ' + duracion(t.minutos) + ' en el colegio. Te faltaron ' +
-    duracion(t.meta - t.minutos) + '.' + nota);
+    duracion(Math.max(0, t.meta - t.minutos - minutosPermisoDe(t))) + '.' + nota);
 }
 
 // ---------------------------------------------------------------- Pantallas
@@ -897,8 +926,9 @@ function pantallaInicio() {
     dato('Salida', t && t.salida ? horaAmigable(t.salida) : '--:--') +
     dato('Horas', t && t.entrada ? duracion(trabajado) : '—', 'horas-hoy') + '</div>';
   if (t && t.entrada) {
-    const faltan = Math.max(0, metaDia - trabajado);
-    html += '<div class="barra' + (faltan === 0 ? ' ok' : '') + '"><span style="width:' + Math.min(100, trabajado * 100 / Math.max(1, metaDia)) + '%"></span></div>' +
+    const conPermiso = trabajado + minutosPermisoDe(t);
+    const faltan = Math.max(0, metaDia - conPermiso);
+    html += '<div class="barra' + (faltan === 0 ? ' ok' : '') + '"><span style="width:' + Math.min(100, conPermiso * 100 / Math.max(1, metaDia)) + '%"></span></div>' +
       '<p class="chico ' + (faltan === 0 ? 'exito' : '') + '">' + (faltan === 0 ? 'Meta de ' + duracion(metaDia) + ' cumplida ✓'
         : (t.salida ? 'Faltaron ' : 'Te faltan ') + duracion(faltan) + ' para la meta de ' + duracion(metaDia) + '.') + '</p>';
     const extra = t.salida ? Math.max(0, trabajado - metaDia) : 0;
@@ -983,7 +1013,7 @@ function historial() {
   return lista.map(t => {
     const ahora = Date.now();
     const min = minutosTrabajados(t, ahora);
-    const cumplio = t.salida ? min >= (t.meta || meta()) : null;
+    const cumplio = t.salida ? cumpleMeta(t) : null;
     return '<div class="tarjeta"><div class="fila"><h3 class="crece">' + esc(fechaLegible(t.fecha)) + '</h3>' +
       (t.actividad ? '<span class="etiqueta" style="color:var(--granate)">Actividad</span>'
         : t.puntual === true ? '<span class="etiqueta exito">Puntual</span>' : t.puntual === false ? '<span class="etiqueta alerta">Tarde</span>' : '') + '</div>' +

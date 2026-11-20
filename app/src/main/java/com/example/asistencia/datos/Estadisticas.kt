@@ -74,11 +74,25 @@ class Jornada(val dia: Long, val marcas: List<Marca>, perfil: Perfil) {
     /** La salida fue al día siguiente (turno nocturno). */
     val salidaDiaSiguiente get() = salida != null && inicioDelDia(salida.fechaHora) != dia
 
-    /** Minutos entre entrada y salida; si el turno sigue abierto, cuenta hasta [ahora]. */
+    /** Permisos por horas de ese día, como intervalos (inicio y fin en milisegundos). */
+    private val intervalosPermiso: List<Pair<Long, Long>> = perfil.permisosPorHoras(dia).map {
+        (dia + aMinutos(it.horaInicio) * 60_000L) to (dia + aMinutos(it.horaFin) * 60_000L)
+    }
+
+    /**
+     * Minutos entre entrada y salida (si el turno sigue abierto, hasta [ahora]), sin el tiempo de permiso que cae
+     * en medio: por ejemplo, con permiso de 12:00 a 13:00 de 7:00 a 16:00 son 8 h. Ese permiso cuenta para la meta.
+     */
     fun minutosTrabajados(ahora: Long): Long? {
         val e = entrada ?: return null
         val fin = salida?.fechaHora ?: if (enCurso(ahora)) ahora else return null
-        return max(0L, (fin - e.fechaHora) / 60_000)
+        val inicio = e.fechaHora
+        val permiso = intervalosPermiso.sumOf { (i0, f0) ->
+            // En un turno nocturno, un permiso antes de la hora de entrada es del día siguiente.
+            val (i, f) = if (i0 < inicio && fin - dia > 24 * 60 * 60_000L) (i0 + 86_400_000L) to (f0 + 86_400_000L) else i0 to f0
+            max(0L, minOf(f, fin) - maxOf(i, inicio))
+        }
+        return max(0L, (fin - inicio - permiso) / 60_000)
     }
 
     /** null mientras no haya salida. */

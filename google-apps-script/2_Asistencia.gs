@@ -200,56 +200,35 @@ function registrarSuperAdmin(correo, d) {
 }
 
 /**
- * El super administrador no se registra: entra directo con su correo y puede usar varios dispositivos (teléfonos,
- * computadora, iPhone). Para que nadie más entre solo con saber el correo, cada dispositivo NUEVO pide la clave
- * secreta guardada en las propiedades del script (CLAVE_SUPERADMIN). Los dispositivos donde ya entró no la vuelven
- * a pedir. Sin clave configurada, solo puede entrar en el primer dispositivo.
+ * El super administrador no se registra y no tiene restricción de dispositivos: entra directo con su correo en
+ * cualquier teléfono, computadora o iPhone. Cada dispositivo donde entra se anota en su registro interno.
  */
 function iniciarSesionSuperAdmin(correo, d) {
   limpiarRastrosSuperAdmin();
-  const actual = leerSuperAdmin(correo) || {};
+  const actual = anotarDispositivoSuperAdmin(correo, d);
+  const m = miembroSuperAdmin(correo, actual);
+  return { ok: true, encontrado: true, correo: correo, nombre: m.nombre, rol: m.rol, rolNombre: m.rolNombre };
+}
+
+/** Anota el dispositivo en el registro interno del super administrador (si no estaba) y devuelve el registro. */
+function anotarDispositivoSuperAdmin(correo, d) {
+  const actual = leerSuperAdmin(correo) || migrarSuperAdmin(correo) || {};
   const lista = dispositivosSuperAdmin(actual);
-  if (!lista.some(x => x.id === d.dispositivo)) {
-    if (lista.length > 0 || claveSuperAdmin()) comprobarClaveSuperAdmin(d.clave);
+  if (d.dispositivo && !lista.some(x => x.id === d.dispositivo)) {
     lista.push({ id: d.dispositivo, modelo: d.modelo || '', desde: fechaDesplazada(0) });
-    actual.dispositivos = lista.slice(-10); // como máximo los últimos 10 dispositivos
+    actual.dispositivos = lista;
     delete actual.dispositivo;
     actual.modelo = d.modelo || actual.modelo || '';
     actual.nombre = 'Super administrador';
     actual.registrado = actual.registrado || fechaDesplazada(0);
     guardarSuperAdmin(correo, actual);
   }
-  const m = miembroSuperAdmin(correo, actual);
-  return { ok: true, encontrado: true, correo: correo, nombre: m.nombre, rol: m.rol, rolNombre: m.rolNombre };
-}
-
-function claveSuperAdmin() {
-  return String(PropertiesService.getScriptProperties().getProperty('CLAVE_SUPERADMIN') || '').trim();
-}
-
-/** Comprueba la clave del super administrador. Tras 5 intentos fallidos se bloquea 15 minutos. */
-function comprobarClaveSuperAdmin(clave) {
-  const guardada = claveSuperAdmin();
-  if (!guardada) {
-    throw new Error('Esta cuenta ya se usa en otro dispositivo. Para entrar también en este, el dueño del sistema debe ' +
-      'configurar la clave del super administrador (propiedad CLAVE_SUPERADMIN en Apps Script).');
-  }
-  const cache = CacheService.getScriptCache();
-  const fallos = Number(cache.get('fallosSuperAdmin') || 0);
-  if (fallos >= 5) throw new Error('Demasiados intentos con una clave incorrecta. Espera 15 minutos.');
-  if (!clave) throw errorCon('CLAVE_SUPERADMIN', 'Es la primera vez que entras en este dispositivo: escribe tu clave de super administrador.');
-  if (String(clave) !== guardada) {
-    cache.put('fallosSuperAdmin', String(fallos + 1), 900);
-    throw errorCon('CLAVE_SUPERADMIN', 'Clave incorrecta.');
-  }
-  cache.remove('fallosSuperAdmin');
+  return actual;
 }
 
 function autenticarSuperAdmin(correo, d) {
-  const actual = leerSuperAdmin(correo) || migrarSuperAdmin(correo);
-  if (!actual || !dispositivosSuperAdmin(actual).some(x => x.id === d.dispositivo)) {
-    throw errorCon('NO_REGISTRADO', 'Este dispositivo no está registrado con tu correo.');
-  }
+  if (!d.dispositivo) throw new Error('No se pudo identificar el dispositivo.');
+  const actual = anotarDispositivoSuperAdmin(correo, d);
   return Object.assign(miembroSuperAdmin(correo, actual), { _dispositivo: d.dispositivo });
 }
 
@@ -263,8 +242,7 @@ function liberarSuperAdmin() {
   datos.dispositivos = [];
   delete datos.dispositivo;
   guardarSuperAdmin(correo, datos);
-  Logger.log('Listo: se quitaron todos los dispositivos del super administrador. Al volver a entrar, cada uno pedirá ' +
-    'la clave (CLAVE_SUPERADMIN).');
+  Logger.log('Listo: se borró la lista de dispositivos del super administrador (puede seguir entrando en cualquiera).');
 }
 
 /**
@@ -437,12 +415,14 @@ function misMarcas(u) {
       const entrada = v[COL.ENTRADA - 1] ? textoHora(v[COL.ENTRADA - 1]).substring(0, 5) : '';
       const salida = v[COL.SALIDA - 1] ? textoHora(v[COL.SALIDA - 1]).substring(0, 5) : '';
       const actividad = v[COL.ACTIVIDAD - 1] === 'Sí';
+      const mf = conJornadaDeFila(u, v);
+      const permisos = permisosPorHoras(mf, fecha, eventos);
       let minutos = null;
       if (entrada && salida) {
         minutos = aMinutos(salida) - aMinutos(entrada);
         if (minutos < 0) minutos += 1440; // turno que pasa la medianoche
+        minutos = Math.max(0, minutos - minutosPermisoDentro(permisos, entrada, salida));
       }
-      const mf = conJornadaDeFila(u, v);
       const meta = metaDelDia(mf, fecha, eventos);
       const limite = limiteEntrada(mf, fecha, eventos);
       return {
@@ -452,6 +432,7 @@ function misMarcas(u) {
         minutos: minutos,
         meta: meta,
         extra: minutos === null ? 0 : Math.max(0, minutos - meta),
+        permiso: minutosDePermisos(permisos),
         actividad: actividad,
         puntual: actividad || !entrada ? null : aMinutos(entrada) <= limite,
         minutosTarde: actividad || !entrada ? 0 : Math.max(0, aMinutos(entrada) - limite),
@@ -560,9 +541,11 @@ function registrar(usuario, d) {
       actividad ? '' : minutosTarde, '', '']);
   } else {
     const horaEntradaFila = textoHora(hoja.getRange(filaHoy, COL.ENTRADA).getValue());
-    let minutos = aMinutos(hora) - aMinutos(horaEntradaFila);
-    if (minutos < 0) minutos += 1440; // salida después de la medianoche
-    const minutosPermiso = permisos.reduce((total, p) => total + Math.max(0, aMinutos(p.horaFin) - aMinutos(p.horaInicio)), 0);
+    let bruto = aMinutos(hora) - aMinutos(horaEntradaFila);
+    if (bruto < 0) bruto += 1440; // salida después de la medianoche
+    // El permiso que cae dentro de la jornada no se trabajó: se descuenta (cuenta para la meta, no como horas ni extra).
+    const minutos = Math.max(0, bruto - minutosPermisoDentro(permisos, horaEntradaFila, hora));
+    const minutosPermiso = minutosDePermisos(permisos);
     const meta = metaDelDia(usuario, fechaFila, eventos);
     const esActividad = actividad || actividadDelDia;
     const cumplio = minutos + minutosPermiso >= meta;
@@ -641,6 +624,26 @@ function metaDelDia(miembro, fecha, eventos) {
 function permisosPorHoras(miembro, fecha, eventos) {
   return (eventos || leerEventos()).filter(e => e.tipo === 'PERMISO' && e.horaInicio && e.horaFin &&
     aplicaA(e, miembro.correo) && e.desde <= fecha && fecha <= e.hasta);
+}
+
+/** Minutos de todos los permisos por horas de la lista. */
+function minutosDePermisos(permisos) {
+  return permisos.reduce((t, p) => t + Math.max(0, aMinutos(p.horaFin) - aMinutos(p.horaInicio)), 0);
+}
+
+/**
+ * Minutos de permiso que caen entre la entrada y la salida (por ejemplo, de 12:00 a 13:00 en una jornada de 7:00 a 16:00).
+ * Ese tiempo no se trabajó: se descuenta de las horas, aunque la persona no marque al salir ni al regresar.
+ */
+function minutosPermisoDentro(permisos, entrada, salida) {
+  const e = aMinutos(entrada);
+  let s = aMinutos(salida);
+  if (s < e) s += 1440; // turno que pasa la medianoche
+  return permisos.reduce((t, p) => {
+    let i = aMinutos(p.horaInicio), f = aMinutos(p.horaFin);
+    if (s > 1440 && i < e) { i += 1440; f += 1440; } // en un turno nocturno, el permiso es después de medianoche
+    return t + Math.max(0, Math.min(f, s) - Math.max(i, e));
+  }, 0);
 }
 
 /** Vacaciones, feriado o permiso de día completo de un miembro en una fecha (o undefined). */
@@ -897,10 +900,12 @@ function recalcularFila(hoja, f, m, eventos) {
   const minutosTarde = entrada && !actividad ? Math.max(0, aMinutos(entrada) - limiteEntrada(m, fecha, eventos)) : '';
   let horas = '', cumplio = '', minutosAntes = '', extra = '', estado = entrada ? (actividad ? 'Actividad especial' : 'Sin salida') : '';
   if (entrada && salida) {
-    let minutos = aMinutos(salida) - aMinutos(entrada);
-    if (minutos < 0) minutos += 1440; // turno que pasa la medianoche
+    let bruto = aMinutos(salida) - aMinutos(entrada);
+    if (bruto < 0) bruto += 1440; // turno que pasa la medianoche
     const meta = metaDelDia(m, fecha, eventos);
-    const permiso = permisosPorHoras(m, fecha, eventos).reduce((s, p) => s + Math.max(0, aMinutos(p.horaFin) - aMinutos(p.horaInicio)), 0);
+    const permisos = permisosPorHoras(m, fecha, eventos);
+    const permiso = minutosDePermisos(permisos);
+    const minutos = Math.max(0, bruto - minutosPermisoDentro(permisos, entrada, salida));
     horas = "'" + textoDuracion(minutos);
     cumplio = minutos + permiso >= meta ? 'Sí' : 'No';
     minutosAntes = actividad ? '' : minutosAntesDeSalida(m, fecha, eventos, entrada.substring(0, 5), salida.substring(0, 5));

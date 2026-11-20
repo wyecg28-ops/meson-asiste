@@ -375,6 +375,7 @@ private fun TarjetaPersona(f: FilaReporte, titulo: String = f.nombre, onClick: (
                 if (f.faltas > 0) Etiqueta("${f.faltas} faltas", MaterialTheme.colorScheme.error)
                 if (f.salidasAnticipadas > 0) Etiqueta("${f.salidasAnticipadas} salidas antes", colorAviso)
                 if (f.minutosExtra > 0) Etiqueta("+${formatoDuracionCorta(f.minutosExtra)} extra", MaterialTheme.colorScheme.primary)
+                if (f.minutosPermiso > 0) Etiqueta("${formatoDuracionCorta(f.minutosPermiso)} de permiso", MaterialTheme.colorScheme.outline)
                 if (f.porRevisar > 0) Etiqueta("${f.porRevisar} por revisar", MaterialTheme.colorScheme.secondary)
             }
         }
@@ -395,6 +396,7 @@ private fun FilaDia(d: DiaReporte, fondo: Boolean) {
         d.horas.takeIf { it.isNotBlank() }?.let { "$it h" },
         d.minutosAntes.toIntOrNull()?.takeIf { it > 0 }?.let { "salió $it min antes" },
         d.extra.takeIf { it.isNotBlank() && it != "0:00" }?.let { "+$it extra" },
+        d.permiso.takeIf { it.isNotBlank() }?.let { "permiso $it" },
         d.observacion.takeIf { it.isNotBlank() },
     ).joinToString(" · ")
     Row(
@@ -478,11 +480,11 @@ private fun num(n: Int) = Celda(n.toString(), n.toDouble())
 private fun num(n: Long) = Celda(n.toString(), n.toDouble())
 
 private val ENCABEZADOS_RESUMEN = listOf("Días", "Puntuales", "Tardes", "Min tarde", "Salidas antic.", "Faltas",
-    "Incompletos", "Actividades", "Horas", "Horas extra", "Por revisar")
+    "Incompletos", "Actividades", "Horas", "Horas extra", "Por revisar", "Horas permiso")
 
 private fun celdasResumen(f: FilaReporte) = listOf(num(f.dias), num(f.puntuales), num(f.tardes), num(f.minutosTarde),
     num(f.salidasAnticipadas), num(f.faltas), num(f.incompletos), num(f.actividades), horas(f.minutos),
-    horas(f.minutosExtra), num(f.porRevisar))
+    horas(f.minutosExtra), num(f.porRevisar), horas(f.minutosPermiso))
 
 private fun subtituloTotales(t: FilaReporte) = "Total: ${formatoDuracion(t.minutos)} trabajadas · ${t.dias} días · " +
     "${t.puntuales} puntuales · ${t.tardes} tardes · ${t.faltas} faltas · ${formatoDuracion(t.minutosExtra)} extra"
@@ -511,16 +513,16 @@ fun tablaMensual(r: ReporteMes, persona: String?): TablaReporte {
         titulo = "$persona · ${nombreMes(r.mes)}",
         subtitulo = colegio + (resumen?.let { " · ${it.rol} · ${it.jornada}\n${subtituloTotales(it)}" } ?: ""),
         encabezados = listOf("Fecha", "Entrada", "Salida", "Horas", "Estado", "Ent. status", "Min tarde", "Min antes",
-            "Extra", "Revisión", "Observación"),
+            "Extra", "Permiso", "Revisión", "Observación"),
         filas = dias.map { d ->
             listOf(Celda(d.fecha.split("-").reversed().joinToString("/")), Celda(d.entrada), Celda(d.salida), Celda(d.horas),
                 Celda(d.estadoDia), Celda(if (d.estado == "Puntual" || d.estado == "Tarde") d.estado else "—"),
                 Celda(d.minutosTarde, d.minutosTarde.toDoubleOrNull()), Celda(d.minutosAntes, d.minutosAntes.toDoubleOrNull()),
-                Celda(d.extra), Celda(d.revision), Celda(d.observacion))
+                Celda(d.extra), Celda(d.permiso), Celda(d.revision), Celda(d.observacion))
         },
         totales = resumen?.let {
             listOf(Celda("Total"), Celda(""), Celda(""), horas(it.minutos), Celda("${it.dias} días"), Celda("${it.tardes} tardes"),
-                num(it.minutosTarde), Celda("${it.salidasAnticipadas} salidas"), horas(it.minutosExtra), Celda(""), Celda(""))
+                num(it.minutosTarde), Celda("${it.salidasAnticipadas} salidas"), horas(it.minutosExtra), horas(it.minutosPermiso), Celda(""), Celda(""))
         },
         firmas = firmasPersona(persona),
     )

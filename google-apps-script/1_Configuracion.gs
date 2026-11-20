@@ -37,10 +37,8 @@ const CONFIG = {
     ['B', 'Jornada B', '09:30', '18:30', '1,2,3,4,5'],
   ],
   // Correo del SUPER ADMINISTRADOR (uno solo). Controla todo y decide qué funciones tiene el Administrador.
-  // No se registra: entra con "Iniciar sesión" y este correo, en todos sus dispositivos. Cada dispositivo NUEVO pide
-  // la clave secreta de Configuración del proyecto → Propiedades del script → CLAVE_SUPERADMIN.
-  // No aparece en la hoja (ni en "Personal" ni en "Roles"). Si pierde un teléfono: ejecutar liberarSuperAdmin()
-  // (quita todos sus dispositivos; al volver a entrar, cada uno pide la clave).
+  // No se registra: entra con "Iniciar sesión" y este correo en cualquier dispositivo, sin restricciones.
+  // No aparece en la hoja (ni en "Personal" ni en "Roles").
   SUPER_ADMINISTRADOR: 'superadmin.31yc0nd3@colegiomeson.edu.gt',
   // Correos que siempre son Administradores.
   // ⚠️ PRUEBAS (temporal): quitar admin.prueba al terminar las pruebas.

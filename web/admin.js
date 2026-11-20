@@ -377,6 +377,7 @@ function reporteEnTarjetas() {
     if (f.faltas) etq.push(['error', f.faltas + ' faltas']);
     if (f.salidasAnticipadas) etq.push(['alerta', f.salidasAnticipadas + ' salidas antes']);
     if (f.extra) etq.push(['', '+' + duracionCorta(f.extra) + ' extra']);
+    if (f.permiso) etq.push(['chico', duracionCorta(f.permiso) + ' de permiso']);
     if (f.porRevisar) etq.push(['', f.porRevisar + ' por revisar']);
     return '<button class="tarjeta tarjeta-reporte" data-accion="' + accion + '" data-valor="' + esc(valor) + '"><div class="fila"><div class="crece">' +
       '<h3>' + esc(titulo) + '</h3>' + (titulo === f.nombre ? '<p class="chico">' + esc((f.rol || '') + ' · ' + (f.jornada || '')) + '</p>' : '') +
@@ -396,7 +397,7 @@ function reporteEnTarjetas() {
       const est = d.estado === 'Falta' ? ['error', 'Falta'] : d.estado === 'Día libre' ? ['chico', d.estadoDia] :
         d.estado === 'Actividad especial' ? ['', 'Actividad'] : d.estado === 'Tarde' ? ['alerta', 'Tarde ' + d.minutosTarde + ' min'] : ['exito', 'Puntual'];
       const detalle = [d.horas ? d.horas + ' h' : '', Number(d.minutosAntes) > 0 ? 'salió ' + d.minutosAntes + ' min antes' : '',
-        d.extra && d.extra !== '0:00' ? '+' + d.extra + ' extra' : '', d.observacion || ''].filter(Boolean).join(' · ');
+        d.extra && d.extra !== '0:00' ? '+' + d.extra + ' extra' : '', d.permiso ? 'permiso ' + d.permiso : '', d.observacion || ''].filter(Boolean).join(' · ');
       const f = new Date(d.fecha + 'T12:00:00');
       return '<div class="fila-dia"><b class="fecha-dia">' + DIAS[f.getDay()] + ' ' + d.fecha.slice(8) + '</b><div class="crece"><span>' +
         esc(d.entrada ? d.entrada + ' – ' + (d.salida || 'sin salida') : '—') + '</span>' + (detalle ? '<p class="chico">' + esc(detalle) + '</p>' : '') +
@@ -519,12 +520,12 @@ function tablaHtml(t) {
 const celdaHoras = min => ({ texto: Math.floor(min / 60) + ':' + String(min % 60).padStart(2, '0'), numero: Math.round(min / 60 * 100) / 100 });
 const celdaNum = n => ({ texto: String(n || 0), numero: Number(n || 0) });
 const celda = t => ({ texto: t == null ? '' : String(t) });
-const ENC_RESUMEN = ['Días', 'Puntuales', 'Tardes', 'Min tarde', 'Salidas antic.', 'Faltas', 'Incompletos', 'Actividades', 'Horas', 'Horas extra', 'Por revisar'];
+const ENC_RESUMEN = ['Días', 'Puntuales', 'Tardes', 'Min tarde', 'Salidas antic.', 'Faltas', 'Incompletos', 'Actividades', 'Horas', 'Horas extra', 'Por revisar', 'Horas permiso'];
 const celdasResumenWeb = f => [celdaNum(f.dias), celdaNum(f.puntuales), celdaNum(f.tardes), celdaNum(f.minutosTarde), celdaNum(f.salidasAnticipadas),
-  celdaNum(f.faltas), celdaNum(f.incompletos), celdaNum(f.actividades), celdaHoras(f.minutos || 0), celdaHoras(f.extra || 0), celdaNum(f.porRevisar)];
+  celdaNum(f.faltas), celdaNum(f.incompletos), celdaNum(f.actividades), celdaHoras(f.minutos || 0), celdaHoras(f.extra || 0), celdaNum(f.porRevisar), celdaHoras(f.permiso || 0)];
 function totalFilas(nombre, filas) {
   const t = { nombre: nombre };
-  ['dias', 'puntuales', 'tardes', 'minutosTarde', 'salidasAnticipadas', 'faltas', 'incompletos', 'actividades', 'libres', 'minutos', 'extra', 'porRevisar']
+  ['dias', 'puntuales', 'tardes', 'minutosTarde', 'salidasAnticipadas', 'faltas', 'incompletos', 'actividades', 'libres', 'minutos', 'extra', 'permiso', 'porRevisar']
     .forEach(k => { t[k] = filas.reduce((s, f) => s + Number(f[k] || 0), 0); });
   return t;
 }
@@ -548,14 +549,14 @@ function tablaReporteActual() {
     const dias = r.detalle.filter(d => d.nombre === rep.persona).sort((a, b) => a.fecha.localeCompare(b.fecha));
     return { titulo: rep.persona + ' · ' + nombreMesWeb(r.mes),
       subtitulo: 'Colegio Mesón' + (res ? ' · ' + res.rol + ' · ' + res.jornada + '\n' + textoTotales(totalFilas('', [res])) : ''),
-      encabezados: ['Fecha', 'Entrada', 'Salida', 'Horas', 'Estado', 'Ent. status', 'Min tarde', 'Min antes', 'Extra', 'Revisión', 'Observación'],
+      encabezados: ['Fecha', 'Entrada', 'Salida', 'Horas', 'Estado', 'Ent. status', 'Min tarde', 'Min antes', 'Extra', 'Permiso', 'Revisión', 'Observación'],
       filas: dias.map(d => [celda(d.fecha.split('-').reverse().join('/')), celda(d.entrada), celda(d.salida), celda(d.horas),
         celda(d.estadoDia || d.estado), celda(d.estado === 'Puntual' || d.estado === 'Tarde' ? d.estado : '—'),
         { texto: String(d.minutosTarde === '' ? '' : d.minutosTarde), numero: d.minutosTarde === '' ? null : Number(d.minutosTarde) },
         { texto: String(d.minutosAntes === '' ? '' : d.minutosAntes), numero: d.minutosAntes === '' ? null : Number(d.minutosAntes) },
-        celda(d.extra), celda(d.revision === 'No aplica' ? '' : d.revision), celda(d.observacion)]),
+        celda(d.extra), celda(d.permiso || ''), celda(d.revision === 'No aplica' ? '' : d.revision), celda(d.observacion)]),
       totales: res ? [celda('Total'), celda(''), celda(''), celdaHoras(res.minutos), celda(res.dias + ' días'), celda(res.tardes + ' tardes'),
-        celdaNum(res.minutosTarde), celda(res.salidasAnticipadas + ' salidas'), celdaHoras(res.extra), celda(''), celda('')] : null,
+        celdaNum(res.minutosTarde), celda(res.salidasAnticipadas + ' salidas'), celdaHoras(res.extra), celdaHoras(res.permiso || 0), celda(''), celda('')] : null,
       firmas: firmasPersona(rep.persona) };
   }
   const r = adm.anual;

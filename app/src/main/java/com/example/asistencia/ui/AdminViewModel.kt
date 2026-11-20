@@ -111,6 +111,8 @@ data class FilaReporte(
     val minutos: Long,
     val minutosExtra: Long,
     val porRevisar: Int,
+    /** Minutos de permisos por horas (cuentan para la meta, no como horas trabajadas). */
+    val minutosPermiso: Long = 0,
 ) {
     companion object {
         fun deJson(j: JSONObject, mes: String) = FilaReporte(
@@ -131,6 +133,7 @@ data class FilaReporte(
             minutos = j.optLong("minutos"),
             minutosExtra = j.optLong("extra"),
             porRevisar = j.optInt("porRevisar"),
+            minutosPermiso = j.optLong("permiso"),
         )
 
         /** Suma varias filas (por ejemplo, los meses de una persona o todo el personal). */
@@ -141,7 +144,7 @@ data class FilaReporte(
             faltas = filas.sumOf { it.faltas }, incompletos = filas.sumOf { it.incompletos },
             actividades = filas.sumOf { it.actividades }, libres = filas.sumOf { it.libres },
             minutos = filas.sumOf { it.minutos }, minutosExtra = filas.sumOf { it.minutosExtra },
-            porRevisar = filas.sumOf { it.porRevisar },
+            porRevisar = filas.sumOf { it.porRevisar }, minutosPermiso = filas.sumOf { it.minutosPermiso },
         )
     }
 }
@@ -162,6 +165,8 @@ data class DiaReporte(
     val extra: String,
     val revision: String,
     val observacion: String,
+    /** Horas de permiso de ese día ("1:00"), o vacío. */
+    val permiso: String = "",
 )
 
 /** Reporte de un mes ("2026-11"): resumen por persona y detalle por día. */
@@ -373,6 +378,7 @@ class AdminViewModel(app: Application) : AndroidViewModel(app) {
                 extra = d.optString("extra"),
                 revision = d.optString("revision").takeIf { it != "No aplica" }.orEmpty(),
                 observacion = d.optString("observacion"),
+                permiso = d.optString("permiso"),
             )
         }
         _estado.update { it.copy(reporte = ReporteMes(mes, filas, detalle)) }

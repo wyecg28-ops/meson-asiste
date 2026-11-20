@@ -404,7 +404,7 @@ function evaluarMes(m, filas, mes, eventos, hoy) {
   const excepciones = [];
   const r = { correo: m.correo, nombre: m.nombre, rol: m.rolNombre, jornada: jornada.nombre, estado: ESTADOS[m.estado],
     dias: 0, puntuales: 0, tardes: 0, minutosTarde: 0, salidasAnticipadas: 0, faltas: 0, incompletos: 0,
-    actividades: 0, libres: 0, minutos: 0, extra: 0, porRevisar: 0 };
+    actividades: 0, libres: 0, minutos: 0, extra: 0, permiso: 0, porRevisar: 0 };
     for (let dia = 1; dia <= diasMes; dia++) {
       const fecha = mes + '-' + ('0' + dia).slice(-2);
       if (fecha > hoy) break;
@@ -426,9 +426,14 @@ function evaluarMes(m, filas, mes, eventos, hoy) {
         else if (minutosTarde > 0) { r.tardes++; r.minutosTarde += minutosTarde; estado = 'Tarde'; }
         else { r.puntuales++; estado = 'Puntual'; }
         let minutos = 0, extra = 0, minutosAntes = 0;
+        const permisos = permisosPorHoras(mf, fecha, eventos);
+        const permiso = minutosDePermisos(permisos);
+        r.permiso += permiso;
         if (salida) {
           minutos = aMinutos(salida) - aMinutos(entrada);
           if (minutos < 0) minutos += 1440; // turno que pasa la medianoche
+          // El permiso dentro de la jornada no se trabajó: se descuenta.
+          minutos = Math.max(0, minutos - minutosPermisoDentro(permisos, entrada, salida));
           r.minutos += minutos;
           // Horas extra: lo que pasa de la meta del día (solo marcas verificadas).
           if (revision !== POR_REVISAR && revision !== 'Rechazada') extra = Math.max(0, minutos - meta);
@@ -444,7 +449,8 @@ function evaluarMes(m, filas, mes, eventos, hoy) {
         detalle.push({ nombre: m.nombre, fecha: fecha, entrada: entrada, salida: salida,
           horas: salida ? textoDuracion(minutos) : '', estado: estado, revision: revision || 'No aplica',
           minutos: salida ? minutos : '', estadoDia: estadoDia, minutosTarde: minutosTarde, minutosAntes: salida ? minutosAntes : '',
-          meta: textoDuracion(meta), extra: extra ? textoDuracion(extra) : '', observacion: obs });
+          meta: textoDuracion(meta), extra: extra ? textoDuracion(extra) : '', permiso: permiso ? textoDuracion(permiso) : '',
+          observacion: obs });
         if (estadoDia === 'Parcial') excepciones.push({ nombre: m.nombre, fecha: fecha, tipo: 'Registro incompleto',
           detalle: 'Falta la salida (entrada a las ' + entrada + ').' });
         if (minutosTarde > 0) excepciones.push({ nombre: m.nombre, fecha: fecha, tipo: 'Llegada tarde',
@@ -542,6 +548,11 @@ function minutosAntesDeSalida(m, fecha, eventos, entrada, salida) {
   if (!salidaEsperada) return 0;
   let fin = aMinutos(salidaEsperada);
   if (fin <= entradaEsperada) fin += 1440;
+  permisosPorHoras(m, fecha, eventos).forEach(p => {
+    let i = aMinutos(p.horaInicio), f = aMinutos(p.horaFin);
+    if (fin > 1440 && i < entradaEsperada) { i += 1440; f += 1440; }
+    if (i < fin && f >= fin) fin = i; // con permiso hasta el final, puede salir al empezar el permiso
+  });
   let real = aMinutos(salida);
   if (real < aMinutos(entrada)) real += 1440;
   return Math.max(0, fin - real);
@@ -627,7 +638,7 @@ const RESUMEN_GLOBAL = {
   nombre: 'Resumen Global',
   encabezados: ['Empleado', 'Rol', 'Jornada', 'Estado', 'Total horas', 'Días asistidos', 'Puntuales', 'Llegadas tarde',
     'Min tarde', 'Salidas anticipadas', 'Registros incompletos', 'Inasistencias', 'Días libres', 'Actividades especiales',
-    'Horas extra', 'Por revisar'],
+    'Horas extra', 'Por revisar', 'Horas permiso'],
 };
 const ESTADO_GLOBAL = {
   nombre: 'Estado Global',
@@ -661,7 +672,7 @@ function refrescarPestanas() {
   const fecha = f => f.split('-').reverse().join('-'); // 2026-11-03 → 03-11-2026, como en el sistema anterior
   escribirReporte(RESUMEN_GLOBAL, r.resumen.map(x => [x.nombre, x.rol, x.jornada, x.estado, horas(x.minutos), x.dias,
     x.puntuales, x.tardes, x.minutosTarde, x.salidasAnticipadas, x.incompletos, x.faltas, x.libres, x.actividades,
-    horas(x.extra), x.porRevisar]), mes);
+    horas(x.extra), x.porRevisar, horas(x.permiso || 0)]), mes);
   escribirReporte(ESTADO_GLOBAL, r.detalle.slice().sort((a, b) => a.fecha.localeCompare(b.fecha) ||
     String(a.nombre).localeCompare(String(b.nombre))).map(d => [fecha(d.fecha), d.nombre, d.entrada, d.salida, d.horas,
     d.minutos, d.estadoDia, d.estado === 'Tarde' || d.estado === 'Puntual' ? d.estado : '—', d.minutosTarde,
