@@ -54,7 +54,7 @@ No se avisa si ya marcó o si tiene el día libre en el calendario.
 ## Roles, jornadas y reglas (en `1_Configuracion.gs` → `CONFIG`)
 
 - **Roles:** Administrador, Docente, Personal administrativo, Personal de apoyo. El administrador asigna los roles desde la app (o en la columna `Rol` de `Docentes`).
-- **Administrador:** la cuenta genérica `admin.prueba@colegiomeson.edu.gt` (en `ADMINISTRADORES`) siempre es administradora. Desde *Admin → Miembros* puede dar el rol a otras personas. No se usan correos personales en el código.
+- **Administrador:** el super administrador da el rol de Administrador (o cualquier otro) desde *Admin → Miembros*. Opcionalmente, los correos de `ADMINISTRADORES` siempre son administradores. No se usan correos personales en el código.
 - **Empezar desde cero:** *Ejecutar → `reiniciarTodo`* deja la hoja vacía (solo encabezados). No se puede deshacer. En cada teléfono, *Perfil → Cerrar sesión* borra el historial local.
 - **Permisos para varias personas:** en *Admin → Calendario*, "Solo algunas personas" permite marcar a varios miembros a la vez.
 - **Roles que no marcan asistencia** (como el Administrador): en la app no ven *Inicio*, *Resumen* ni *Permisos*, no reciben recordatorios y no aparecen en *Admin → Hoy* ni en los reportes.

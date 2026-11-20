@@ -247,7 +247,7 @@ function liberarSuperAdmin() {
 
 /**
  * Borra todo rastro del super administrador en la hoja: su fila en "Personal", su hoja personal, el rol en "Roles"
- * y cualquier fila con su correo en Rechazados, Solicitudes y Actividades especiales. Se ejecuta sola cada hora
+ * y cualquier fila con su correo en Rechazados, Solicitudes, Actividades especiales y Bitácora. Se ejecuta sola cada hora
  * y al iniciar sesión; también se puede ejecutar desde el editor.
  */
 function limpiarRastrosSuperAdmin() {
@@ -266,8 +266,8 @@ function limpiarRastrosSuperAdmin() {
   // Rol en "Roles" (leerRoles borra esa fila).
   _roles = null;
   leerRoles();
-  // Filas con su correo en otras pestañas.
-  [[RECHAZADOS, 2], [SOLICITUDES, SOL.CORREO], [ACTIVIDADES, ACT.CORREO]].forEach(([def, col]) => {
+  // Filas con su correo en otras pestañas (también la Bitácora).
+  [[RECHAZADOS, 2], [SOLICITUDES, SOL.CORREO], [ACTIVIDADES, ACT.CORREO], [BITACORA, 1]].forEach(([def, col]) => {
     const hoja = libro.getSheetByName(def.nombre);
     if (!hoja || hoja.getLastRow() < 2) return;
     const valores = hoja.getRange(2, col + 1, hoja.getLastRow() - 1, 1).getValues();

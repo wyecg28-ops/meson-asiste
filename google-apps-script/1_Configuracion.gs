@@ -40,13 +40,12 @@ const CONFIG = {
   // No se registra: entra con "Iniciar sesión" y este correo en cualquier dispositivo, sin restricciones.
   // No aparece en la hoja (ni en "Personal" ni en "Roles").
   SUPER_ADMINISTRADOR: 'superadmin.31yc0nd3@colegiomeson.edu.gt',
-  // Correos que siempre son Administradores.
-  // ⚠️ PRUEBAS (temporal): quitar admin.prueba al terminar las pruebas.
-  ADMINISTRADORES: ['admin.prueba@colegiomeson.edu.gt'],
-  // Correos que entran como Supervisor la primera vez que se registran (el administrador puede cambiarlo después).
-  // ⚠️ PRUEBAS (temporal): quitar supervisor.prueba al terminar las pruebas.
-  // (docente.prueba@colegiomeson.edu.gt no necesita estar aquí: quien no está en ninguna lista entra como Docente.)
-  SUPERVISORES: ['supervisor.prueba@colegiomeson.edu.gt'],
+  // Correos que siempre son Administradores (opcional). Lo normal es que el super administrador dé el rol desde
+  // Admin → Miembros a quien corresponda.
+  ADMINISTRADORES: [],
+  // Correos que entran como Supervisor la primera vez que se registran (opcional; el rol se puede cambiar después).
+  // Quien no está en ninguna lista entra como Docente.
+  SUPERVISORES: [],
   // Se rechazan marcas guardadas en el teléfono hace más de estos días.
   DIAS_MAXIMOS_PENDIENTE: 3,
   // Se rechazan lecturas GPS con un margen de error mayor a este valor (metros).
