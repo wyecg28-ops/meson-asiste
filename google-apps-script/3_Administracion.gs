@@ -9,18 +9,20 @@
 // ---------------------------------------------------------------- Administración
 
 function administrar(admin, d) {
+  // Solo un super administrador ve los registros de los super administradores.
+  _verSuperAdmin = esSuperAdmin(admin.rol);
   switch (d.accion) {
     case 'adminHoy': return adminHoy();
     case 'adminMiembros': return {
       ok: true,
       miembros: leerMiembros(),
-      roles: Object.keys(leerRoles()).map(rolJson),
+      roles: rolesVisibles(admin),
       jornadas: Object.keys(leerJornadas()).map(jornadaJson),
     };
     case 'adminAsignar': return adminAsignar(admin, d);
     case 'adminEstado': return adminEstado(admin, d);
     case 'adminEliminarMiembro': return adminEliminarMiembro(admin, d);
-    case 'adminLiberar': return adminLiberar(d);
+    case 'adminLiberar': return adminLiberar(admin, d);
     case 'adminJornadas': return { ok: true, jornadas: Object.keys(leerJornadas()).map(jornadaJson), enUso: jornadasEnUso() };
     case 'adminGuardarJornada': return adminGuardarJornada(d.jornada || {});
     case 'adminEliminarJornada': return adminEliminarJornada(d.codigo);
@@ -29,9 +31,18 @@ function administrar(admin, d) {
     case 'adminEliminarEvento': return adminEliminarEvento(d.id);
     case 'adminActividades': return adminActividades();
     case 'adminRevisarActividad': return adminRevisarActividad(admin, d);
-    case 'adminSolicitudes': return { ok: true, solicitudes: leerSolicitudes().filter(s => s.estado !== 'CANCELADA').slice(0, 80) };
+    case 'adminSolicitudes': {
+      const ocultos = correosOcultos();
+      // Con el rol de cada persona (sale en el PDF de la solicitud).
+      const roles = {};
+      leerMiembros().forEach(m => { roles[m.correo] = m.rolNombre; });
+      return { ok: true, solicitudes: leerSolicitudes().filter(s => s.estado !== 'CANCELADA' && !ocultos[s.correo]).slice(0, 80)
+        .map(s => Object.assign(s, { rol: roles[String(s.correo).toLowerCase()] || '' })) };
+    }
     case 'adminRevisarSolicitud': return adminRevisarSolicitud(admin, d);
     case 'adminReporte': return adminReporte(d);
+    case 'adminResumenAnual': return adminResumenAnual(d);
+    case 'adminActualizarReportes': return actualizarReportes();
     case 'adminConfig': return adminConfig();
     case 'adminGuardarReglas': return adminGuardarReglas(d);
     case 'adminAgregarSede': return adminAgregarSede(d.sede || {});
@@ -39,11 +50,35 @@ function administrar(admin, d) {
     case 'adminEliminarSede': return adminEliminarSede(d.id);
     case 'adminGuardarVerificacion': return adminGuardarVerificacion(d);
     case 'adminSecretoQr': return adminSecretoQr(d.id);
-    case 'adminRoles': return adminRoles();
-    case 'adminGuardarRol': return adminGuardarRol(d.rol || {});
-    case 'adminEliminarRol': return adminEliminarRol(d.codigo);
+    case 'adminRoles': return adminRoles(admin);
+    case 'adminGuardarRol': return adminGuardarRol(admin, d.rol || {});
+    case 'adminEliminarRol': return adminEliminarRol(admin, d.codigo);
     default: throw new Error('Acción no válida.');
   }
+}
+
+/** Correos de los super administradores, que se ocultan a quien no es super administrador ({correo: true}). */
+function correosOcultos() {
+  if (_verSuperAdmin) return {};
+  const ocultos = {};
+  const valores = obtenerHoja(DOCENTES.nombre, DOCENTES.encabezados).getDataRange().getValues();
+  valores.slice(1).filter(v => v[DOC.CORREO]).map(miembroDe).forEach(m => { if (esSuperAdmin(m.rol)) ocultos[m.correo] = true; });
+  return ocultos;
+}
+
+/** Roles que se pueden ver y asignar. El de super administrador es interno: no aparece nunca. */
+function rolesVisibles(admin) {
+  return Object.keys(leerRoles()).filter(c => c !== 'SUPERADMIN').map(rolJson);
+}
+
+/** Solo el super administrador puede tocar a otro super administrador o a quien tiene un rol fijo. */
+function protegerMiembro(admin, m) {
+  const objetivo = miembroDe(m.fila.valores);
+  if (esSuperAdmin(objetivo.rol) && !esSuperAdmin(admin.rol)) throw new Error('No se encontró a ' + m.correo + '.');
+  if (objetivo.rol === 'ADMINISTRADOR' && !esSuperAdmin(admin.rol)) {
+    throw new Error('Solo el super administrador puede cambiar a un administrador.');
+  }
+  return objetivo;
 }
 
 /** Quién ha marcado hoy, quién llegó tarde, quién falta y quién tiene el día libre (solo roles que marcan y activos). */
@@ -98,19 +133,18 @@ function filaMiembro(correo) {
 
 function adminAsignar(admin, d) {
   const m = filaMiembro(d.objetivo);
-  if (d.rol) {
+  const actual = protegerMiembro(admin, m).rol;
+  if (d.rol && d.rol !== actual) {
     const roles = leerRoles();
-    if (!roles[d.rol]) throw new Error('Rol no válido.');
-    const actual = miembroDe(m.fila.valores).rol;
+    if (!roles[d.rol] || esSuperAdmin(d.rol)) throw new Error('Rol no válido.');
+    if (ROLES_PROTEGIDOS.indexOf(d.rol) >= 0 && !esSuperAdmin(admin.rol)) {
+      throw new Error('Solo el super administrador puede asignar el rol "' + roles[d.rol].nombre + '".');
+    }
     if ((esGestor(d.rol) || esGestor(actual)) && !puede(admin.rol, 'ROLES')) {
-      throw new Error('Solo el administrador puede dar o quitar roles con funciones de administración.');
+      throw new Error('Tu rol no puede dar o quitar roles con funciones de administración.');
     }
-    if (m.correo === admin.correo && d.rol !== 'ADMINISTRADOR') {
-      throw new Error('No puedes quitarte tu propio rol de administrador; pídeselo a otro administrador.');
-    }
-    if (esAdministradorFijo(m.correo) && d.rol !== 'ADMINISTRADOR') {
-      throw new Error(m.correo + ' es administrador fijo (CONFIG.ADMINISTRADORES en el script).');
-    }
+    if (m.correo === admin.correo) throw new Error('No puedes cambiar tu propio rol.');
+    if (esRolFijo(m.correo)) throw new Error(m.correo + ' tiene un rol fijo (definido en CONFIG del script).');
     m.hoja.getRange(m.fila.numero, DOC.ROL + 1).setValue(d.rol);
   }
   if (d.jornada) {
@@ -123,9 +157,10 @@ function adminAsignar(admin, d) {
 /** Activa o desactiva a un miembro. Desactivado = no puede usar la app. */
 function adminEstado(admin, d) {
   const m = filaMiembro(d.objetivo);
+  protegerMiembro(admin, m);
   const estado = d.estado === 'INACTIVO' ? 'INACTIVO' : 'ACTIVO';
   if (estado === 'INACTIVO' && m.correo === admin.correo) throw new Error('No puedes desactivarte a ti mismo.');
-  if (estado === 'INACTIVO' && esAdministradorFijo(m.correo)) throw new Error('El administrador fijo no se puede desactivar.');
+  if (estado === 'INACTIVO' && esRolFijo(m.correo)) throw new Error('Esta cuenta tiene un rol fijo y no se puede desactivar.');
   m.hoja.getRange(m.fila.numero, DOC.ESTADO + 1).setValue(ESTADOS[estado]);
   return { ok: true, mensaje: m.fila.valores[DOC.NOMBRE] + (estado === 'ACTIVO' ? ' está activo.' : ' quedó desactivado.') };
 }
@@ -133,15 +168,17 @@ function adminEstado(admin, d) {
 /** Elimina a un miembro: se le cierra el acceso y deja de aparecer. Su hoja de asistencia se conserva. */
 function adminEliminarMiembro(admin, d) {
   const m = filaMiembro(d.objetivo);
+  protegerMiembro(admin, m);
   if (m.correo === admin.correo) throw new Error('No puedes eliminarte a ti mismo.');
-  if (esAdministradorFijo(m.correo)) throw new Error('El administrador fijo no se puede eliminar.');
+  if (esRolFijo(m.correo)) throw new Error('Esta cuenta tiene un rol fijo y no se puede eliminar.');
   m.hoja.getRange(m.fila.numero, DOC.ESTADO + 1).setValue(ESTADOS.ELIMINADO);
   m.hoja.getRange(m.fila.numero, DOC.DISPOSITIVO + 1).setValue('');
   return { ok: true, mensaje: m.fila.valores[DOC.NOMBRE] + ' fue eliminado.' };
 }
 
-function adminLiberar(d) {
+function adminLiberar(admin, d) {
   const m = filaMiembro(d.objetivo);
+  if (m.correo !== admin.correo) protegerMiembro(admin, m);
   m.hoja.getRange(m.fila.numero, DOC.DISPOSITIVO + 1).setValue('');
   return { ok: true, mensaje: 'Teléfono liberado. ' + m.fila.valores[DOC.NOMBRE] + ' ya puede registrarse en otro teléfono.' };
 }
@@ -259,6 +296,10 @@ function adminRevisarSolicitud(admin, d) {
   if (!fila) throw new Error('La solicitud ya no existe.');
   const s = solicitudDe(fila.valores);
   if (s.estado !== 'PENDIENTE') throw new Error('Esta solicitud ya fue revisada o cancelada.');
+  // Nadie revisa lo suyo: la solicitud de un supervisor la revisa otro supervisor o el administrador.
+  if (s.correo.toLowerCase() === String(admin.correo).toLowerCase()) {
+    throw new Error('No puedes aprobar ni rechazar tu propia solicitud. Debe revisarla otro supervisor o el administrador.');
+  }
   const aprobar = d.aprobar === true;
   let idEvento = '';
   if (aprobar) {
@@ -276,7 +317,9 @@ function adminRevisarSolicitud(admin, d) {
 
 function adminActividades() {
   const valores = obtenerHoja(ACTIVIDADES.nombre, ACTIVIDADES.encabezados).getDataRange().getValues();
-  const pendientes = valores.slice(1).filter(v => v[ACT.ID] && v[ACT.ESTADO] === POR_REVISAR).map(v => ({
+  const ocultos = correosOcultos();
+  const pendientes = valores.slice(1).filter(v => v[ACT.ID] && v[ACT.ESTADO] === POR_REVISAR &&
+    !ocultos[String(v[ACT.CORREO]).toLowerCase()]).map(v => ({
     id: String(v[ACT.ID]),
     fecha: textoFecha(v[ACT.FECHA]),
     correo: v[ACT.CORREO],
@@ -293,6 +336,9 @@ function adminRevisarActividad(admin, d) {
   const hoja = obtenerHoja(ACTIVIDADES.nombre, ACTIVIDADES.encabezados);
   const fila = buscarFila(hoja, ACT.ID, String(d.id || '').toLowerCase());
   if (!fila) throw new Error('La actividad ya no existe.');
+  if (String(fila.valores[ACT.CORREO]).toLowerCase() === String(admin.correo).toLowerCase()) {
+    throw new Error('No puedes revisar tu propia actividad especial. Debe revisarla otro supervisor o el administrador.');
+  }
   const estado = d.aprobar === true ? 'Aprobada' : 'Rechazada';
   hoja.getRange(fila.numero, ACT.ESTADO + 1, 1, 3).setValues([[estado, admin.nombre, new Date()]]);
 
@@ -313,61 +359,377 @@ function adminRevisarActividad(admin, d) {
  */
 function adminReporte(d) {
   const mes = /^\d{4}-\d{2}$/.test(String(d.mes || '')) ? String(d.mes) : fechaDesplazada(0).substring(0, 7);
-  const partes = mes.split('-').map(Number);
-  const diasMes = new Date(partes[0], partes[1], 0).getDate();
+  return conLibroDelAnio(mes.substring(0, 4), () => reporteDelMes(mes));
+}
+
+function reporteDelMes(mes) {
   const hoy = fechaDesplazada(0);
   const eventos = leerEventos();
   const libro = libroAsistencia();
   const resumen = [];
   const detalle = [];
-
+  const excepciones = [];
   leerMiembros().filter(m => marcaAsistencia(m.rol)).forEach(m => {
-    const jornada = jornadaJson(m.jornada);
-    const filas = {};
-    const hoja = libro.getSheetByName(m.hoja);
-    if (hoja && hoja.getLastRow() > 1) {
-      hoja.getRange(2, 1, hoja.getLastRow() - 1, ENCABEZADOS_DOCENTE.length).getValues().forEach(v => {
-        const f = textoFecha(v[COL.FECHA - 1]);
-        if (f.indexOf(mes) === 0) filas[f] = v;
-      });
-    }
-    const r = { nombre: m.nombre, rol: m.rolNombre, jornada: jornada.nombre, estado: ESTADOS[m.estado],
-      dias: 0, puntuales: 0, tardes: 0, faltas: 0, actividades: 0, minutos: 0, extra: 0, porRevisar: 0 };
+    const e = evaluarMes(m, filasDeMiembro(libro, m), mes, eventos, hoy);
+    resumen.push(e.r);
+    e.detalle.forEach(x => detalle.push(x));
+    e.excepciones.forEach(x => excepciones.push(x));
+  });
+  const porNombreYFecha = (a, b) => String(a.nombre).localeCompare(String(b.nombre)) || a.fecha.localeCompare(b.fecha);
+  resumen.sort((a, b) => String(a.nombre).localeCompare(String(b.nombre)));
+  detalle.sort(porNombreYFecha);
+  excepciones.sort(porNombreYFecha);
+  return { ok: true, mes: mes, resumen: resumen, detalle: detalle, excepciones: excepciones };
+}
+
+/** Filas de la hoja de un miembro, por fecha ("yyyy-MM-dd" → fila). Se lee una sola vez. */
+function filasDeMiembro(libro, m) {
+  const filas = {};
+  const hoja = libro.getSheetByName(m.hoja);
+  if (hoja && hoja.getLastRow() > 1) {
+    hoja.getRange(2, 1, hoja.getLastRow() - 1, ENCABEZADOS_DOCENTE.length).getValues().forEach(v => {
+      const f = textoFecha(v[COL.FECHA - 1]);
+      if (f) filas[f] = v;
+    });
+  }
+  return filas;
+}
+
+/** Evalúa un mes de un miembro: resumen (r), detalle por día y excepciones. */
+function evaluarMes(m, filas, mes, eventos, hoy) {
+  const partes = mes.split('-').map(Number);
+  const diasMes = new Date(partes[0], partes[1], 0).getDate();
+  const jornada = jornadaJson(m.jornada);
+  const detalle = [];
+  const excepciones = [];
+  const r = { correo: m.correo, nombre: m.nombre, rol: m.rolNombre, jornada: jornada.nombre, estado: ESTADOS[m.estado],
+    dias: 0, puntuales: 0, tardes: 0, minutosTarde: 0, salidasAnticipadas: 0, faltas: 0, incompletos: 0,
+    actividades: 0, libres: 0, minutos: 0, extra: 0, porRevisar: 0 };
     for (let dia = 1; dia <= diasMes; dia++) {
       const fecha = mes + '-' + ('0' + dia).slice(-2);
       if (fecha > hoy) break;
       const v = filas[fecha];
+      let meta = metaDelDia(m, fecha, eventos);
       if (v) {
         r.dias++;
+        // Cada día se evalúa con la jornada con la que se marcó (un cambio de jornada cuenta desde ese momento).
+        const mf = conJornadaDeFila(m, v);
+        meta = metaDelDia(mf, fecha, eventos);
         const entrada = textoHora(v[COL.ENTRADA - 1]).substring(0, 5);
         const salida = v[COL.SALIDA - 1] ? textoHora(v[COL.SALIDA - 1]).substring(0, 5) : '';
         const esActividad = v[COL.ACTIVIDAD - 1] === 'Sí';
         const revision = String(v[COL.REVISION - 1] || '');
+        const limite = limiteEntrada(mf, fecha, eventos);
+        const minutosTarde = esActividad ? 0 : Math.max(0, aMinutos(entrada) - limite);
         let estado;
         if (esActividad) { r.actividades++; estado = 'Actividad especial'; }
-        else if (aMinutos(entrada) > limiteEntrada(m, fecha, eventos)) { r.tardes++; estado = 'Tarde'; }
+        else if (minutosTarde > 0) { r.tardes++; r.minutosTarde += minutosTarde; estado = 'Tarde'; }
         else { r.puntuales++; estado = 'Puntual'; }
-        let minutos = 0;
+        let minutos = 0, extra = 0, minutosAntes = 0;
         if (salida) {
           minutos = aMinutos(salida) - aMinutos(entrada);
           if (minutos < 0) minutos += 1440; // turno que pasa la medianoche
           r.minutos += minutos;
           // Horas extra: lo que pasa de la meta del día (solo marcas verificadas).
-          if (revision !== POR_REVISAR && revision !== 'Rechazada') r.extra += Math.max(0, minutos - metaDelDia(m, fecha, eventos));
+          if (revision !== POR_REVISAR && revision !== 'Rechazada') extra = Math.max(0, minutos - meta);
+          r.extra += extra;
+          if (!esActividad) minutosAntes = minutosAntesDeSalida(mf, fecha, eventos, entrada, salida);
+          if (minutosAntes > 0) r.salidasAnticipadas++;
         }
         if (revision === POR_REVISAR) r.porRevisar++;
+        // Estado del día (como en el sistema anterior): Asistió, Parcial (falta la salida), En curso o Actividad especial.
+        let estadoDia = esActividad ? 'Actividad especial' : (salida ? 'Asistió' : (fecha === hoy ? 'En curso' : 'Parcial'));
+        if (estadoDia === 'Parcial') r.incompletos++;
+        const obs = String(v[COL.OBSERVACION - 1] || '');
         detalle.push({ nombre: m.nombre, fecha: fecha, entrada: entrada, salida: salida,
-          horas: salida ? textoDuracion(minutos) : '', estado: estado, revision: revision || 'No aplica' });
-      } else if (fecha < hoy && fecha >= m.registrado && esDiaLaboral(m, fecha) && !diaLibre(m, fecha, eventos)) {
-        r.faltas++;
-        detalle.push({ nombre: m.nombre, fecha: fecha, entrada: '', salida: '', horas: '', estado: 'Falta', revision: '' });
+          horas: salida ? textoDuracion(minutos) : '', estado: estado, revision: revision || 'No aplica',
+          minutos: salida ? minutos : '', estadoDia: estadoDia, minutosTarde: minutosTarde, minutosAntes: salida ? minutosAntes : '',
+          meta: textoDuracion(meta), extra: extra ? textoDuracion(extra) : '', observacion: obs });
+        if (estadoDia === 'Parcial') excepciones.push({ nombre: m.nombre, fecha: fecha, tipo: 'Registro incompleto',
+          detalle: 'Falta la salida (entrada a las ' + entrada + ').' });
+        if (minutosTarde > 0) excepciones.push({ nombre: m.nombre, fecha: fecha, tipo: 'Llegada tarde',
+          detalle: 'Entrada a las ' + entrada + ' (' + minutosTarde + ' min tarde).' });
+        if (minutosAntes > 0) excepciones.push({ nombre: m.nombre, fecha: fecha, tipo: 'Salida anticipada',
+          detalle: 'Salida a las ' + salida + ' (' + minutosAntes + ' min antes de su hora).' });
+        if (revision === POR_REVISAR) excepciones.push({ nombre: m.nombre, fecha: fecha, tipo: 'Por revisar',
+          detalle: esActividad ? 'Actividad especial fuera del colegio.' : 'Marca por revisar (QR o Wi-Fi no verificados).' });
+      } else if (fecha < hoy && fecha >= m.registrado && esDiaLaboral(m, fecha)) {
+        const libre = diaLibre(m, fecha, eventos);
+        if (libre) {
+          r.libres++;
+          detalle.push({ nombre: m.nombre, fecha: fecha, entrada: '', salida: '', horas: '', estado: 'Día libre', revision: '',
+            minutos: '', estadoDia: TIPOS_EVENTO[libre.tipo], minutosTarde: '', minutosAntes: '', meta: '', extra: '',
+            observacion: libre.detalle || '' });
+        } else {
+          r.faltas++;
+          detalle.push({ nombre: m.nombre, fecha: fecha, entrada: '', salida: '', horas: '', estado: 'Falta', revision: '',
+            minutos: '', estadoDia: 'Inasistencia', minutosTarde: '', minutosAntes: '', meta: textoDuracion(meta), extra: '',
+            observacion: 'Sin registros' });
+          excepciones.push({ nombre: m.nombre, fecha: fecha, tipo: 'Inasistencia', detalle: 'Día laboral sin registros ni permiso.' });
+        }
       }
     }
-    resumen.push(r);
+  return { r: r, detalle: detalle, excepciones: excepciones };
+}
+
+/**
+ * Resumen de un año por persona y por mes (Admin → Reportes). Cada hoja se lee una sola vez.
+ * Devuelve filas { mes, correo, nombre, rol, jornada, dias, puntuales, tardes, minutos, extra, faltas, … }.
+ */
+function adminResumenAnual(d) {
+  const anioPedido = /^\d{4}$/.test(String(d.anio || '')) ? String(d.anio) : fechaDesplazada(0).substring(0, 4);
+  return conLibroDelAnio(anioPedido, () => resumenDelAnio(anioPedido));
+}
+
+function resumenDelAnio(anio) {
+  const hoy = fechaDesplazada(0);
+  const ultimoMes = anio === hoy.substring(0, 4) ? Number(hoy.substring(5, 7)) : (anio < hoy.substring(0, 4) ? 12 : 0);
+  const meses = [];
+  for (let i = 1; i <= ultimoMes; i++) meses.push(anio + '-' + ('0' + i).slice(-2));
+  const eventos = leerEventos();
+  const libro = libroAsistencia();
+  const filas = [];
+  leerMiembros().filter(m => marcaAsistencia(m.rol)).forEach(m => {
+    const registros = filasDeMiembro(libro, m);
+    meses.forEach(mes => {
+      // Meses antes de que la persona se registrara: no cuentan (ni como faltas).
+      if (m.registrado && mes < m.registrado.substring(0, 7)) return;
+      const r = evaluarMes(m, registros, mes, eventos, hoy).r;
+      r.mes = mes;
+      filas.push(r);
+    });
   });
-  resumen.sort((a, b) => String(a.nombre).localeCompare(String(b.nombre)));
-  detalle.sort((a, b) => String(a.nombre).localeCompare(String(b.nombre)) || a.fecha.localeCompare(b.fecha));
-  return { ok: true, mes: mes, resumen: resumen, detalle: detalle };
+  filas.sort((a, b) => String(a.nombre).localeCompare(String(b.nombre)) || a.mes.localeCompare(b.mes));
+  return { ok: true, anio: anio, meses: meses, filas: filas };
+}
+
+/**
+ * Ranking del mes por horas trabajadas (lo ve todo el personal en la pantalla de inicio).
+ * No incluye a los super administradores ni a quien no marca asistencia. Se guarda 5 minutos en caché.
+ */
+function rankingDelMes(u, mesPedido) {
+  const mes = /^\d{4}-\d{2}$/.test(String(mesPedido || '')) ? String(mesPedido) : fechaDesplazada(0).substring(0, 7);
+  const cache = CacheService.getScriptCache();
+  const clave = 'ranking:' + mes;
+  let lista = cache.get(clave) ? JSON.parse(cache.get(clave)) : null;
+  if (!lista) {
+    lista = adminReporte({ mes: mes }).resumen
+      .filter(r => r.estado !== ESTADOS.INACTIVO && (r.dias > 0 || r.minutos > 0))
+      .map(r => ({ correo: r.correo, nombre: r.nombre, minutos: r.minutos, dias: r.dias, puntuales: r.puntuales,
+        tardes: r.tardes, extra: r.extra }))
+      .sort((a, b) => b.minutos - a.minutos || b.dias - a.dias || String(a.nombre).localeCompare(String(b.nombre)));
+    cache.put(clave, JSON.stringify(lista), 300);
+  }
+  let miPosicion = 0;
+  const publica = lista.map((x, i) => {
+    if (x.correo === u.correo) miPosicion = i + 1;
+    // No se envían los correos de los demás.
+    return { posicion: i + 1, nombre: x.nombre, minutos: x.minutos, dias: x.dias, puntuales: x.puntuales,
+      tardes: x.tardes, extra: x.extra, yo: x.correo === u.correo };
+  });
+  return { ok: true, mes: mes, lista: publica, miPosicion: miPosicion };
+}
+
+/**
+ * Minutos que salió antes de su hora de salida ese día (0 si no). Tiene en cuenta la entrada especial
+ * y los turnos que terminan al día siguiente.
+ */
+function minutosAntesDeSalida(m, fecha, eventos, entrada, salida) {
+  const especial = horarioEspecial(m, fecha, eventos);
+  const horario = horarioDelDia(jornadaJson(m.jornada), diaIso(fecha));
+  const entradaEsperada = aMinutos(especial ? especial.horaEntrada : horario.entrada);
+  const salidaEsperada = especial && especial.horaSalida ? especial.horaSalida : (especial ? '' : horario.salida);
+  if (!salidaEsperada) return 0;
+  let fin = aMinutos(salidaEsperada);
+  if (fin <= entradaEsperada) fin += 1440;
+  let real = aMinutos(salida);
+  if (real < aMinutos(entrada)) real += 1440;
+  return Math.max(0, fin - real);
+}
+
+// ---------------------------------------------------------------- Cierre anual
+
+/**
+ * Cierre anual (se hace solo el 2 de enero): copia todo el año que terminó a un archivo nuevo en el Drive
+ * ("Mesón Asiste — Archivo 2026") y limpia de la hoja principal las marcas, actividades, rechazos, solicitudes y
+ * eventos de ese año. El personal, los roles, las jornadas, la configuración y las sedes NO se tocan.
+ * Los reportes de ese año siguen funcionando: se leen del archivo.
+ */
+function cierreAnual(anioForzado) {
+  const hoy = fechaDesplazada(0);
+  const anio = anioForzado ? String(anioForzado) : String(Number(hoy.substring(0, 4)) - 1);
+  const props = PropertiesService.getScriptProperties();
+  if (props.getProperty('ARCHIVO_' + anio)) return { ok: true, mensaje: 'El año ' + anio + ' ya estaba archivado.' };
+  if (anio >= hoy.substring(0, 4)) throw new Error('Solo se pueden archivar años que ya terminaron.');
+  const libro = libroAsistencia();
+  const fin = anio + '-12-31';
+
+  // 1. Archivo con una copia de todas las pestañas.
+  const archivo = SpreadsheetApp.create('Mesón Asiste — Archivo ' + anio);
+  const vacia = archivo.getSheets()[0];
+  libro.getSheets().forEach(h => h.copyTo(archivo).setName(h.getName()));
+  archivo.deleteSheet(vacia);
+  archivo.setSpreadsheetTimeZone(CONFIG.ZONA_HORARIA);
+  props.setProperty('ARCHIVO_' + anio, archivo.getId());
+
+  // 2. Limpieza de la hoja principal (solo lo de ese año o antes).
+  let filas = 0;
+  const personal = obtenerHoja(DOCENTES.nombre, DOCENTES.encabezados).getDataRange().getValues().slice(1)
+    .map(v => String(v[DOC.HOJA] || '')).filter(String);
+  personal.forEach(n => { filas += borrarFilasHasta(libro.getSheetByName(n), COL.FECHA - 1, fin); });
+  filas += borrarFilasHasta(libro.getSheetByName(ACTIVIDADES.nombre), ACT.FECHA, fin);
+  filas += borrarFilasHasta(libro.getSheetByName(RECHAZADOS.nombre), 0, fin);
+  filas += borrarFilasHasta(libro.getSheetByName(SOLICITUDES.nombre), SOL.HASTA, fin);
+  filas += borrarFilasHasta(libro.getSheetByName(CALENDARIO.nombre), CAL.HASTA, fin);
+  CacheService.getScriptCache().removeAll(['destacados']);
+  return { ok: true, mensaje: 'Cierre anual ' + anio + ': archivo "' + archivo.getName() + '" creado y ' + filas +
+    ' filas limpiadas de la hoja principal.' };
+}
+
+/** Borra las filas cuya fecha (columna [col], base 0) es igual o anterior a [fin]. Borra por bloques (rápido). */
+function borrarFilasHasta(hoja, col, fin) {
+  if (!hoja || hoja.getLastRow() < 2) return 0;
+  const fechas = hoja.getRange(2, col + 1, hoja.getLastRow() - 1, 1).getValues().map(v => textoFecha(v[0]));
+  let borradas = 0;
+  let i = fechas.length - 1;
+  while (i >= 0) {
+    const vieja = f => /^\d{4}-\d{2}-\d{2}/.test(f) && f.substring(0, 10) <= fin;
+    if (!vieja(fechas[i])) { i--; continue; }
+    let inicio = i;
+    while (inicio - 1 >= 0 && vieja(fechas[inicio - 1])) inicio--;
+    hoja.deleteRows(inicio + 2, i - inicio + 1);
+    borradas += i - inicio + 1;
+    i = inicio - 1;
+  }
+  return borradas;
+}
+
+/**
+ * Ejecuta [fn] leyendo del archivo de ese año si ya se hizo su cierre anual (reportes de años pasados).
+ * Si no hay archivo, usa la hoja principal.
+ */
+function conLibroDelAnio(anio, fn) {
+  const id = anio < fechaDesplazada(0).substring(0, 4) &&
+    PropertiesService.getScriptProperties().getProperty('ARCHIVO_' + anio);
+  if (!id) return fn();
+  const antes = { libro: _libro, jornadas: _jornadas, config: _config, roles: _roles };
+  _libro = SpreadsheetApp.openById(id); _jornadas = null; _config = null; _roles = null;
+  try {
+    return fn();
+  } finally {
+    _libro = antes.libro; _jornadas = antes.jornadas; _config = antes.config; _roles = antes.roles;
+  }
+}
+
+// ---------------------------------------------------------------- Pestañas de reporte en la hoja
+
+const RESUMEN_GLOBAL = {
+  nombre: 'Resumen Global',
+  encabezados: ['Empleado', 'Rol', 'Jornada', 'Estado', 'Total horas', 'Días asistidos', 'Puntuales', 'Llegadas tarde',
+    'Min tarde', 'Salidas anticipadas', 'Registros incompletos', 'Inasistencias', 'Días libres', 'Actividades especiales',
+    'Horas extra', 'Por revisar'],
+};
+const ESTADO_GLOBAL = {
+  nombre: 'Estado Global',
+  encabezados: ['Fecha', 'Empleado', 'Entrada', 'Salida', 'Horas', 'Min trab', 'Estado', 'Ent status', 'Min ret',
+    'Sal ant', 'Min antes', 'Meta', 'Horas extra', 'Revisión', 'Obs'],
+};
+const EXCEPCIONES = { nombre: 'Excepciones', encabezados: ['Empleado', 'Fecha', 'Tipo excepción', 'Detalles'] };
+
+/**
+ * Actualiza las pestañas "Resumen Global", "Estado Global" y "Excepciones" con el mes actual.
+ * Se ejecuta sola cada hora (ver activarActualizacionAutomatica) y desde la app en Admin → Reportes.
+ */
+function actualizarReportes() {
+  try { limpiarRastrosSuperAdmin(); } catch (e) { Logger.log('Limpieza del super administrador: ' + e.message); }
+  // Del 2 de enero en adelante: si el año pasado aún no se archivó, se hace el cierre anual.
+  const hoyTexto = fechaDesplazada(0);
+  if (hoyTexto.substring(5, 7) === '01' && hoyTexto.substring(8, 10) >= '02') {
+    try { Logger.log(cierreAnual().mensaje); } catch (e) { Logger.log('Cierre anual pendiente: ' + e.message); }
+  }
+  const resultado = refrescarPestanas();
+  // Ajusta el ancho de las columnas de todas las pestañas al contenido.
+  libroAsistencia().getSheets().forEach(h => { try { ajustarColumnas(h); } catch (e) { /* pestaña sin datos */ } });
+  return resultado;
+}
+
+/** Escribe "Resumen Global", "Estado Global" y "Excepciones" con el mes actual (rápido: sin limpiezas). */
+function refrescarPestanas() {
+  const mes = fechaDesplazada(0).substring(0, 7);
+  const r = adminReporte({ mes: mes });
+  const horas = min => Math.round(min / 60 * 100) / 100;
+  const fecha = f => f.split('-').reverse().join('-'); // 2026-11-03 → 03-11-2026, como en el sistema anterior
+  escribirReporte(RESUMEN_GLOBAL, r.resumen.map(x => [x.nombre, x.rol, x.jornada, x.estado, horas(x.minutos), x.dias,
+    x.puntuales, x.tardes, x.minutosTarde, x.salidasAnticipadas, x.incompletos, x.faltas, x.libres, x.actividades,
+    horas(x.extra), x.porRevisar]), mes);
+  escribirReporte(ESTADO_GLOBAL, r.detalle.slice().sort((a, b) => a.fecha.localeCompare(b.fecha) ||
+    String(a.nombre).localeCompare(String(b.nombre))).map(d => [fecha(d.fecha), d.nombre, d.entrada, d.salida, d.horas,
+    d.minutos, d.estadoDia, d.estado === 'Tarde' || d.estado === 'Puntual' ? d.estado : '—', d.minutosTarde,
+    d.minutosAntes === '' ? '—' : (d.minutosAntes > 0 ? 'Sí' : 'No'), d.minutosAntes, d.meta, d.extra,
+    d.revision === 'No aplica' ? '' : d.revision, d.observacion]), mes);
+  escribirReporte(EXCEPCIONES, r.excepciones.map(e => [e.nombre, fecha(e.fecha), e.tipo, e.detalle]), mes);
+  return { ok: true, mensaje: 'Reportes de la hoja actualizados (' + r.resumen.length + ' personas).' };
+}
+
+// ---------------------------------------------------------------- Todo enlazado
+
+/** Acciones de la app que cambian lo que muestran los reportes y el ranking. */
+const AFECTA_REPORTES = ['registrar', 'registrarDocente', 'adminAsignar', 'adminEstado', 'adminEliminarMiembro',
+  'adminGuardarJornada', 'adminEliminarJornada', 'adminAgregarEvento', 'adminEliminarEvento', 'adminRevisarActividad',
+  'adminRevisarSolicitud', 'adminGuardarReglas', 'adminGuardarRol', 'adminEliminarRol'];
+
+/** El ranking y los destacados guardados en memoria se vuelven a calcular con los datos nuevos. */
+function limpiarCacheReportes() {
+  CacheService.getScriptCache().removeAll(['ranking:' + fechaDesplazada(0).substring(0, 7), 'destacados']);
+}
+
+/**
+ * Algo cambió desde la app: se borra la memoria del ranking y, en unos segundos (sin hacer esperar a quien hizo
+ * el cambio), se actualizan las pestañas de reporte. Varios cambios seguidos se juntan en una sola actualización.
+ */
+function cambiaronDatos(accion) {
+  try {
+    // Una marca no borra el ranking (se renueva solo cada 5 minutos): así no se recalcula con cada entrada.
+    if (accion !== 'registrar') limpiarCacheReportes();
+    const props = PropertiesService.getScriptProperties();
+    const pendiente = Number(props.getProperty('REFRESCO_REPORTES') || 0);
+    if (pendiente && Date.now() - pendiente < 10 * 60 * 1000) return; // ya hay una actualización en camino
+    props.setProperty('REFRESCO_REPORTES', String(Date.now()));
+    ScriptApp.newTrigger('refrescoProgramado').timeBased().after(20 * 1000).create();
+  } catch (e) {
+    console.log('No se pudo programar la actualización de los reportes: ' + e.message);
+  }
+}
+
+/** Lo ejecuta Google unos segundos después de un cambio hecho desde la app. */
+function refrescoProgramado() {
+  PropertiesService.getScriptProperties().deleteProperty('REFRESCO_REPORTES');
+  ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === 'refrescoProgramado')
+    .forEach(t => ScriptApp.deleteTrigger(t));
+  refrescarPestanas();
+}
+
+/** Reemplaza el contenido de una pestaña de reporte (encabezados en la fila 1). */
+function escribirReporte(def, filas, mes) {
+  const hoja = obtenerHoja(def.nombre, def.encabezados);
+  hoja.getRange(1, 1, 1, def.encabezados.length).setValues([def.encabezados]).setFontWeight('bold');
+  if (hoja.getLastRow() > 1) hoja.getRange(2, 1, hoja.getLastRow() - 1, Math.max(hoja.getLastColumn(), def.encabezados.length)).clearContent();
+  // Números como números (para sumar en la hoja); horas y fechas como texto, para que Sheets no las convierta.
+  const celda = c => c === null || c === undefined ? '' :
+    (typeof c === 'string' && /^\d{1,2}[:-]\d{2}/.test(c) ? "'" + c : c);
+  if (filas.length) hoja.getRange(2, 1, filas.length, def.encabezados.length).setValues(filas.map(f => f.map(celda)));
+  hoja.getRange('A1').setNote('Mes: ' + mes + '. Actualizado: ' +
+    Utilities.formatDate(new Date(), CONFIG.ZONA_HORARIA, 'dd/MM/yyyy HH:mm') +
+    '. Se actualiza sola cada hora; no escribas en esta pestaña.');
+  ajustarColumnas(hoja);
+}
+
+/** Ejecutar una vez desde el editor: actualiza los reportes cada hora (y lo hace ahora). */
+function activarActualizacionAutomatica() {
+  ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === 'actualizarReportes')
+    .forEach(t => ScriptApp.deleteTrigger(t));
+  ScriptApp.newTrigger('actualizarReportes').timeBased().everyHours(1).create();
+  Logger.log(actualizarReportes().mensaje + ' Desde ahora se actualizan solos cada hora.');
 }
 
 // ---------------------------------------------------------------- Ajustes (meta, tolerancia y sedes)
@@ -459,48 +821,61 @@ function adminSecretoQr(id) {
 // ---------------------------------------------------------------- Roles
 
 /** Roles con sus funciones, las funciones disponibles y cuántas personas tiene cada rol. */
-function adminRoles() {
+function adminRoles(admin) {
   const enUso = {};
   leerMiembros().forEach(m => { enUso[m.rol] = (enUso[m.rol] || 0) + 1; });
   return {
     ok: true,
-    roles: Object.keys(leerRoles()).map(rolJson),
-    permisos: Object.keys(PERMISOS).filter(p => p !== 'ROLES').map(p => ({ codigo: p, nombre: PERMISOS[p] })),
+    roles: rolesVisibles(admin),
+    permisos: Object.keys(PERMISOS).map(p => ({ codigo: p, nombre: PERMISOS[p] })),
     enUso: enUso,
   };
 }
 
-/** Crea (sin código) o edita un rol: nombre, si marca asistencia y sus funciones. */
-function adminGuardarRol(r) {
+/**
+ * Crea (sin código) o edita un rol: nombre, si marca asistencia y sus funciones.
+ * Reglas: el Super administrador y el Administrador solo los edita el super administrador (el Super administrador
+ * conserva siempre todas sus funciones), y la función "Gestionar roles" solo la puede dar el super administrador.
+ */
+function adminGuardarRol(admin, r) {
   const nombre = String(r.nombre || '').trim();
   if (nombre.length < 2) throw new Error('Escribe el nombre del rol.');
   const roles = leerRoles();
-  const repetido = Object.keys(roles).filter(c => roles[c].nombre.toLowerCase() === nombre.toLowerCase() && c !== r.codigo)[0];
+  let codigo = String(r.codigo || '').trim().toUpperCase();
+  if (codigo === 'SUPERADMIN') throw new Error('Ese rol no se puede cambiar.');
+  const superAdmin = esSuperAdmin(admin.rol);
+  if (ROLES_PROTEGIDOS.indexOf(codigo) >= 0 && !superAdmin) {
+    throw new Error('Solo el super administrador puede cambiar el rol "' + roles[codigo].nombre + '".');
+  }
+  const repetido = Object.keys(roles).filter(c => roles[c].nombre.toLowerCase() === nombre.toLowerCase() && c !== codigo)[0];
   if (repetido) throw new Error('Ya existe un rol llamado "' + nombre + '".');
   const marca = r.marca === true ? 'Sí' : 'No';
-  const permisos = (r.permisos || []).map(p => String(p).toUpperCase()).filter(p => PERMISOS[p] && p !== 'ROLES');
+  let permisos = (r.permisos || []).map(p => String(p).toUpperCase()).filter(p => PERMISOS[p]);
+  // "Gestionar roles" solo la da el super administrador; si no lo es, se conserva lo que el rol ya tenía.
+  if (!superAdmin) {
+    permisos = permisos.filter(p => p !== 'ROLES');
+    if (codigo && roles[codigo] && roles[codigo].permisos.indexOf('ROLES') >= 0) permisos.push('ROLES');
+  }
   const hoja = obtenerHoja(ROLES_HOJA.nombre, ROLES_HOJA.encabezados);
-  let codigo = String(r.codigo || '').trim().toUpperCase();
   if (codigo && roles[codigo]) {
-    // El Administrador conserva siempre todas sus funciones; solo cambia el nombre y si marca.
-    const funciones = codigo === 'ADMINISTRADOR' ? Object.keys(PERMISOS).join(',') : permisos.join(',');
+    const funciones = codigo === 'SUPERADMIN' ? Object.keys(PERMISOS).join(',') : permisos.join(',');
     const fila = buscarFila(hoja, 0, codigo.toLowerCase());
     hoja.getRange(fila.numero, 1, 1, 4).setValues([[codigo, nombre, marca, funciones]]);
   } else {
     const base = nombre.toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Z0-9]+/g, '_')
       .replace(/^_|_$/g, '').substring(0, 24) || 'ROL';
     codigo = base;
-    for (let i = 2; roles[codigo]; i++) codigo = base + '_' + i;
+    for (let i = 2; roles[codigo] || codigo === 'SUPERADMIN'; i++) codigo = base + '_' + i;
     hoja.appendRow([codigo, nombre, marca, permisos.join(',')]);
   }
   _roles = null;
   return { ok: true, mensaje: 'Rol "' + nombre + '" guardado.' };
 }
 
-function adminEliminarRol(codigo) {
+function adminEliminarRol(admin, codigo) {
   const roles = leerRoles();
   const c = String(codigo || '').toUpperCase();
-  if (!roles[c]) throw new Error('El rol ya no existe.');
+  if (!roles[c] || c === 'SUPERADMIN') throw new Error('El rol ya no existe.');
   if (ROLES_FIJOS.indexOf(c) >= 0) throw new Error('El rol "' + roles[c].nombre + '" no se puede eliminar.');
   const enUso = leerMiembros().filter(m => m.rol === c).length;
   if (enUso) throw new Error(enUso + ' persona(s) tienen este rol. Cámbialas a otro antes de eliminarlo.');
@@ -575,6 +950,10 @@ function distanciaMetros(lat1, lon1, lat2, lon2) {
 function obtenerHoja(nombre, encabezados) {
   const libro = libroAsistencia();
   let hoja = libro.getSheetByName(nombre);
+  // Pestaña que cambió de nombre (por ejemplo "Docentes" → "Personal"): se renombra y conserva todo.
+  if (!hoja && nombre === DOCENTES.nombre && libro.getSheetByName(DOCENTES.nombreAnterior)) {
+    hoja = libro.getSheetByName(DOCENTES.nombreAnterior).setName(nombre);
+  }
   if (!hoja) {
     hoja = libro.insertSheet(nombre);
     hoja.appendRow(encabezados);
@@ -585,7 +964,23 @@ function obtenerHoja(nombre, encabezados) {
     return hoja;
   }
   hoja.getRange(1, 1, 1, encabezados.length).setFontWeight('bold');
+  ajustarColumnas(hoja);
   return hoja;
+}
+
+/**
+ * Ajusta el ancho de cada columna a su contenido, entre 70 y 320 píxeles (para que los enlaces largos de ubicación
+ * no ocupen toda la pantalla). Se hace al crear cada pestaña y cada hora con la actualización de los reportes.
+ */
+function ajustarColumnas(hoja) {
+  const n = hoja ? hoja.getLastColumn() : 0;
+  if (n < 1) return;
+  hoja.autoResizeColumns(1, n);
+  for (let c = 1; c <= n; c++) {
+    const ancho = hoja.getColumnWidth(c);
+    if (ancho > 320) hoja.setColumnWidth(c, 320);
+    else if (ancho < 70) hoja.setColumnWidth(c, 70);
+  }
 }
 
 function buscarFila(hoja, columna, valor) {
@@ -598,4 +993,120 @@ function buscarFila(hoja, columna, valor) {
 
 function json(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
+}
+
+// ---------------------------------------------------------------- Bitácora (pruebas y auditoría)
+
+const BITACORA = {
+  nombre: 'Bitácora',
+  encabezados: ['Fecha y hora', 'Correo', 'Nombre', 'Rol', 'Desde', 'Acción', 'Detalle', 'Resultado'],
+};
+
+const NOMBRES_ACCION = {
+  registrarDocente: 'Crear cuenta', iniciarSesion: 'Iniciar sesión', recuperar: 'Recuperar cuenta', perfil: 'Abrir la app',
+  ranking: 'Ver ranking', misMarcas: 'Ver su historial', liberarMiTelefono: 'Liberar su teléfono',
+  misSolicitudes: 'Ver sus solicitudes', crearSolicitud: 'Pedir permiso o vacaciones', cancelarSolicitud: 'Cancelar su solicitud',
+  adminHoy: 'Ver Hoy', adminMiembros: 'Ver miembros', adminAsignar: 'Cambiar rol o jornada',
+  adminEstado: 'Activar o desactivar miembro', adminEliminarMiembro: 'Eliminar miembro', adminLiberar: 'Liberar teléfono de un miembro',
+  adminJornadas: 'Ver jornadas', adminGuardarJornada: 'Guardar jornada', adminEliminarJornada: 'Eliminar jornada',
+  adminEventos: 'Ver calendario', adminAgregarEvento: 'Agregar al calendario', adminEliminarEvento: 'Eliminar del calendario',
+  adminActividades: 'Ver por revisar', adminRevisarActividad: 'Revisar actividad especial',
+  adminSolicitudes: 'Ver solicitudes', adminRevisarSolicitud: 'Revisar solicitud de permiso',
+  adminReporte: 'Ver reporte del mes', adminResumenAnual: 'Ver resumen anual', adminActualizarReportes: 'Actualizar pestañas de la hoja',
+  adminConfig: 'Ver ajustes', adminGuardarReglas: 'Guardar reglas (meta y tolerancia)', adminAgregarSede: 'Agregar ubicación del colegio',
+  adminEditarSede: 'Editar ubicación del colegio', adminEliminarSede: 'Quitar ubicación del colegio',
+  adminGuardarVerificacion: 'Cambiar verificación (ubicación, Wi-Fi o QR)', adminSecretoQr: 'Mostrar QR de la entrada',
+  adminRoles: 'Ver roles', adminGuardarRol: 'Guardar rol', adminEliminarRol: 'Eliminar rol',
+};
+
+// Consultas: solo se anotan si fallan (si no, la actualización automática llenaría la bitácora).
+const SOLO_CONSULTA = ['recuperar', 'perfil', 'ranking', 'misMarcas', 'misSolicitudes', 'adminHoy', 'adminMiembros',
+  'adminJornadas', 'adminEventos', 'adminActividades', 'adminSolicitudes', 'adminReporte', 'adminResumenAnual', 'adminConfig',
+  'adminRoles'];
+
+/**
+ * Anota en la pestaña "Bitácora" quién hizo qué, desde dónde y si salió bien o con qué error.
+ * El super administrador nunca se anota. Nunca impide la acción aunque falle al anotar.
+ */
+function anotarBitacora(datos, ok, respuesta) {
+  try {
+    if (!CONFIG.BITACORA || !datos || !datos.accion) return;
+    const accion = String(datos.accion);
+    if (ok && SOLO_CONSULTA.indexOf(accion) >= 0) return;
+    const correo = String(datos.correo || '').trim().toLowerCase();
+    if (esSuperAdminFijo(correo)) return;
+    const personal = libroAsistencia().getSheetByName(DOCENTES.nombre);
+    const fila = correo && personal ? buscarFila(personal, DOC.CORREO, correo) : null;
+    const m = fila ? miembroDe(fila.valores) : null;
+    if (m && esSuperAdmin(m.rol)) return;
+    const hoja = obtenerHoja(BITACORA.nombre, BITACORA.encabezados);
+    const resultado = ok
+      ? '✅ Correcto' + (respuesta && respuesta.revision ? ' (quedó por revisar: ' + respuesta.revision + ')' : '')
+      : '❌ ' + ((respuesta && respuesta.mensaje) || 'Error');
+    hoja.appendRow([Utilities.formatDate(new Date(), CONFIG.ZONA_HORARIA, 'dd/MM/yyyy HH:mm:ss'), correo,
+      m ? m.nombre : String(datos.nombre || ''), m ? m.rolNombre : '', origenBitacora(datos.modelo), nombreAccionBitacora(datos),
+      detalleBitacora(datos), resultado]);
+    const maximo = CONFIG.BITACORA_MAXIMO || 3000;
+    if (hoja.getLastRow() > maximo + 200) hoja.deleteRows(2, hoja.getLastRow() - 1 - maximo);
+  } catch (e) {
+    // La bitácora nunca debe impedir que la acción funcione.
+  }
+}
+
+function origenBitacora(modelo) {
+  const m = String(modelo || '');
+  if (!m) return '';
+  return /\(web\)/i.test(m) ? 'Web · ' + m.replace(/\s*\(web\)/i, '') : 'Android · ' + m;
+}
+
+function nombreAccionBitacora(d) {
+  if (d.accion === 'registrar') {
+    const marca = d.marca || {};
+    return 'Marcar ' + (marca.tipo === 'SALIDA' ? 'salida' : 'entrada') + (marca.actividad ? ' (actividad especial)' : '');
+  }
+  return NOMBRES_ACCION[d.accion] || String(d.accion);
+}
+
+/** Resumen corto de lo que se pidió (a quién, qué rol o jornada, qué fechas…). */
+function detalleBitacora(d) {
+  const partes = [];
+  const nombreDe = correo => {
+    const personal = libroAsistencia().getSheetByName(DOCENTES.nombre);
+    const f = personal && correo ? buscarFila(personal, DOC.CORREO, String(correo).toLowerCase()) : null;
+    return f ? String(f.valores[DOC.NOMBRE]) : String(correo || '');
+  };
+  if (d.objetivo) partes.push('a ' + nombreDe(d.objetivo));
+  if (typeof d.rol === 'string' && d.rol) partes.push('rol ' + d.rol);
+  if (d.rol && typeof d.rol === 'object') {
+    partes.push('rol "' + (d.rol.nombre || '') + '"' + (d.rol.marca ? ', marca' : ', no marca') +
+      ((d.rol.permisos || []).length ? ', funciones: ' + d.rol.permisos.join(', ') : ', sin funciones'));
+  }
+  if (typeof d.jornada === 'string' && d.jornada) partes.push('jornada ' + d.jornada);
+  if (d.jornada && typeof d.jornada === 'object') {
+    partes.push('jornada "' + (d.jornada.nombre || '') + '" ' + (d.jornada.entrada || '') + '–' + (d.jornada.salida || '') +
+      ' días ' + (d.jornada.dias || []).join(','));
+  }
+  if (d.estado) partes.push('estado ' + d.estado);
+  if (d.aprobar === true || d.aprobar === false) partes.push(d.aprobar ? 'aprobada' : 'rechazada');
+  if (d.respuesta) partes.push('respuesta: ' + d.respuesta);
+  if (d.evento) {
+    const e = d.evento;
+    partes.push((TIPOS_EVENTO[e.tipo] || e.tipo) + ' ' + e.desde + (e.hasta && e.hasta !== e.desde ? ' al ' + e.hasta : '') +
+      (e.horaInicio ? ' ' + e.horaInicio + '–' + e.horaFin : '') + (e.horaEntrada ? ' entrada ' + e.horaEntrada : '') +
+      (e.horaSalida ? ' salida ' + e.horaSalida : '') + ' · para ' + e.aplicaA);
+  }
+  if (d.solicitud) {
+    const s = d.solicitud;
+    partes.push((s.tipo === 'VACACIONES' ? 'Vacaciones' : 'Permiso') + ' ' + s.desde + (s.hasta && s.hasta !== s.desde ? ' al ' + s.hasta : '') +
+      (s.horaInicio ? ' ' + s.horaInicio + '–' + s.horaFin : '') + ' · ' + (s.motivo || ''));
+  }
+  if (d.sede) partes.push('ubicación "' + (d.sede.nombre || '') + '" radio ' + d.sede.radio + ' m');
+  if (d.metodo && d.accion === 'adminGuardarVerificacion') partes.push('método ' + d.metodo);
+  if (d.horasMeta !== undefined) partes.push('meta ' + d.horasMeta + ' h, tolerancia ' + d.tolerancia + ' min');
+  if (d.mes) partes.push('mes ' + d.mes);
+  if (d.anio) partes.push('año ' + d.anio);
+  if (d.codigo) partes.push('código ' + d.codigo);
+  if (d.marca && d.marca.observacion) partes.push('observación: ' + d.marca.observacion);
+  if (d.accion === 'registrarDocente' && d.nombre) partes.push('nombre ' + d.nombre);
+  return partes.join(' · ').substring(0, 400);
 }

@@ -138,6 +138,7 @@ fun PantallaPermisos(avisos: SnackbarHostState, vm: PermisosViewModel = viewMode
     val estado by vm.estado.collectAsState()
     var nueva by remember { mutableStateOf(false) }
     var cancelando by remember { mutableStateOf<Solicitud?>(null) }
+    val guardarPdf = rememberGuardarPdf()
 
     LaunchedEffect(Unit) { vm.cargar() }
     LaunchedEffect(estado.mensaje) {
@@ -162,7 +163,14 @@ fun PantallaPermisos(avisos: SnackbarHostState, vm: PermisosViewModel = viewMode
         if (lista != null && lista.isEmpty()) {
             EstadoVacio("Sin solicitudes", "Cuando pidas un permiso aparecerá aquí con su estado.")
         }
-        lista?.forEach { s -> TarjetaSolicitud(s, onCancelar = if (s.pendiente) ({ cancelando = s }) else null) }
+        lista?.forEach { s ->
+            TarjetaSolicitud(s, onCancelar = if (s.pendiente) ({ cancelando = s }) else null) {
+                // Formato para imprimir, firmar y entregar a la dirección.
+                TextButton(onClick = { guardarPdf(nombreArchivoSolicitud(s)) { Exportar.solicitudPdf(s, it) } }) {
+                    Text("Descargar PDF para firmar")
+                }
+            }
+        }
     }
 
     if (nueva) DialogoSolicitud(onCerrar = { nueva = false }) { tipo, desde, hasta, porHoras, inicio, fin, motivo ->

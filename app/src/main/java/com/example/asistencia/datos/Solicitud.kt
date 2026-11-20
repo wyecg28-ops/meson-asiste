@@ -19,6 +19,13 @@ data class Solicitud(
     val motivo: String,
     val estado: String,
     val respuesta: String,
+    val correo: String = "",
+    /** Rol de quien la pidió (para el PDF). */
+    val rol: String = "",
+    /** Fecha en que se pidió ("2026-11-19"). */
+    val creada: String = "",
+    val revisadaPor: String = "",
+    val revisadaEl: String = "",
 ) {
     val pendiente get() = estado == "PENDIENTE"
     val porHoras get() = horaInicio.isNotBlank() && horaFin.isNotBlank()
@@ -50,6 +57,11 @@ data class Solicitud(
             motivo = j.optString("motivo"),
             estado = j.optString("estado", "PENDIENTE"),
             respuesta = j.optString("respuesta"),
+            correo = j.optString("correo"),
+            rol = j.optString("rol"),
+            creada = j.optString("creada"),
+            revisadaPor = j.optString("revisadaPor"),
+            revisadaEl = j.optString("revisadaEl"),
         )
     }
 }

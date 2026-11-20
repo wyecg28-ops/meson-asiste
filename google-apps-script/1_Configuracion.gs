@@ -7,7 +7,7 @@
  * Se pega en Extensiones > Apps Script de la hoja de cálculo y se implementa como "Aplicación web".
  *
  * Hojas:
- *  - "Docentes": un registro por miembro (correo, teléfono, rol, jornada y estado). El administrador asigna rol y
+ *  - "Personal" (antes "Docentes"): un registro por miembro (correo, teléfono, rol, jornada y estado). El administrador asigna rol y
  *    jornada, y puede desactivar o eliminar miembros (se les cierra el acceso).
  *  - "Jornadas": horarios de trabajo (entrada, salida y días laborales) que el administrador crea y edita en la app.
  *  - "Configuración": meta de horas y minutos de tolerancia (se cambian desde la app).
@@ -36,15 +36,28 @@ const CONFIG = {
     ['A', 'Jornada A', '07:00', '16:00', '1,2,3,4,5'],
     ['B', 'Jornada B', '09:30', '18:30', '1,2,3,4,5'],
   ],
-  // Correos que siempre son administradores. Es una cuenta genérica (no personal): quien se registre en la app
-  // con este correo entra como Administrador y puede dar ese rol a otros desde Admin → Miembros.
+  // Correo del SUPER ADMINISTRADOR (uno solo). Controla todo y decide qué funciones tiene el Administrador.
+  // No se registra: entra con "Iniciar sesión" y este correo, en todos sus dispositivos. Cada dispositivo NUEVO pide
+  // la clave secreta de Configuración del proyecto → Propiedades del script → CLAVE_SUPERADMIN.
+  // No aparece en la hoja (ni en "Personal" ni en "Roles"). Si pierde un teléfono: ejecutar liberarSuperAdmin()
+  // (quita todos sus dispositivos; al volver a entrar, cada uno pide la clave).
+  SUPER_ADMINISTRADOR: 'superadmin.31yc0nd3@colegiomeson.edu.gt',
+  // Correos que siempre son Administradores.
+  // ⚠️ PRUEBAS (temporal): quitar admin.prueba al terminar las pruebas.
   ADMINISTRADORES: ['admin.prueba@colegiomeson.edu.gt'],
   // Correos que entran como Supervisor la primera vez que se registran (el administrador puede cambiarlo después).
+  // ⚠️ PRUEBAS (temporal): quitar supervisor.prueba al terminar las pruebas.
+  // (docente.prueba@colegiomeson.edu.gt no necesita estar aquí: quien no está en ninguna lista entra como Docente.)
   SUPERVISORES: ['supervisor.prueba@colegiomeson.edu.gt'],
   // Se rechazan marcas guardadas en el teléfono hace más de estos días.
   DIAS_MAXIMOS_PENDIENTE: 3,
   // Se rechazan lecturas GPS con un margen de error mayor a este valor (metros).
   PRECISION_MAXIMA: 100,
+  // Pestaña "Bitácora": anota cada acción del personal (marcas, permisos, cambios de administración) y los errores.
+  // Útil para pruebas y auditoría. false = no se anota nada.
+  BITACORA: true,
+  // Filas máximas de la bitácora (se borran las más viejas).
+  BITACORA_MAXIMO: 3000,
 };
 
 /** Funciones de administración que se pueden activar en cada rol. */
@@ -70,6 +83,10 @@ const ROLES_INICIALES = [
 ];
 // Roles que no se pueden eliminar.
 const ROLES_FIJOS = ['ADMINISTRADOR', 'DOCENTE'];
+// Solo el super administrador puede editar estos roles o asignarlos a alguien.
+const ROLES_PROTEGIDOS = ['ADMINISTRADOR'];
+// Rol interno del super administrador: no está en la hoja "Roles" y no se puede asignar ni editar.
+const ROL_SUPERADMIN = { codigo: 'SUPERADMIN', nombre: 'Super administrador', marca: false, permisos: Object.keys(PERMISOS) };
 const ROLES_HOJA = { nombre: 'Roles', encabezados: ['Código', 'Nombre', 'Marca asistencia', 'Funciones'] };
 
 const ESTADOS = { ACTIVO: 'Activo', INACTIVO: 'Inactivo', ELIMINADO: 'Eliminado' };
@@ -84,11 +101,13 @@ const TIPOS_EVENTO = {
 const METODOS = { UBICACION: 'Solo ubicación', WIFI: 'Wi-Fi', QR: 'Código QR' };
 
 const DOCENTES = {
-  nombre: 'Docentes',
+  nombre: 'Personal',
+  // Nombre que tenía antes: si existe, se renombra sola a "Personal" (conserva todo su contenido).
+  nombreAnterior: 'Docentes',
   encabezados: ['Correo', 'Nombre', 'Hoja', 'Dispositivo', 'Modelo', 'Método', 'Registrado el', 'Rol', 'Jornada',
     'Estado'],
 };
-// Columnas (base 0) de la hoja "Docentes".
+// Columnas (base 0) de la hoja "Personal".
 const DOC = { CORREO: 0, NOMBRE: 1, HOJA: 2, DISPOSITIVO: 3, MODELO: 4, METODO: 5, REGISTRADO: 6, ROL: 7, JORNADA: 8,
   ESTADO: 9 };
 
@@ -131,11 +150,14 @@ const RECHAZADOS = {
 };
 const ENCABEZADOS_DOCENTE = ['Fecha', 'Hora de entrada', 'Correo', 'Hora de salida', 'Observación',
   'Ubicación entrada', 'Ubicación salida', 'Jornada', 'Horas en el colegio', 'Cumplió meta', 'Actividad especial',
-  'Revisión'];
+  'Revisión', 'Estado', 'Ent status', 'Min tarde', 'Min antes', 'Horas extra'];
 
-// Columnas (base 1) de la hoja de cada miembro.
+// Columnas (base 1) de la hoja de cada miembro. Las 5 últimas son como en el sistema anterior (Google Form):
+// Estado (Asistió / Sin salida / Actividad especial), Ent status (Puntual / Tarde), minutos tarde,
+// minutos que salió antes de su hora y horas extra.
 const COL = { FECHA: 1, ENTRADA: 2, CORREO: 3, SALIDA: 4, OBSERVACION: 5, UBIC_ENTRADA: 6, UBIC_SALIDA: 7,
-  JORNADA: 8, HORAS: 9, CUMPLIO: 10, ACTIVIDAD: 11, REVISION: 12 };
+  JORNADA: 8, HORAS: 9, CUMPLIO: 10, ACTIVIDAD: 11, REVISION: 12, ESTADO: 13, ENT_STATUS: 14, MIN_TARDE: 15,
+  MIN_ANTES: 16, EXTRA: 17 };
 
 const ETIQUETAS = { ENTRADA: 'Entrada', SALIDA: 'Salida' };
 const POR_REVISAR = 'Por revisar';
@@ -150,7 +172,7 @@ const PERMISO_DE_ACCION = {
   adminEventos: ['CALENDARIO'], adminAgregarEvento: ['CALENDARIO'], adminEliminarEvento: ['CALENDARIO'],
   adminActividades: ['REVISION'], adminRevisarActividad: ['REVISION'],
   adminSolicitudes: ['SOLICITUDES'], adminRevisarSolicitud: ['SOLICITUDES'],
-  adminReporte: ['REPORTES'],
+  adminReporte: ['REPORTES'], adminActualizarReportes: ['REPORTES'], adminResumenAnual: ['REPORTES'],
   adminConfig: ['AJUSTES'], adminGuardarReglas: ['AJUSTES'], adminAgregarSede: ['AJUSTES'], adminEditarSede: ['AJUSTES'], adminEliminarSede: ['AJUSTES'],
   adminGuardarVerificacion: ['AJUSTES'], adminSecretoQr: ['AJUSTES', 'HOY'],
   adminRoles: ['ROLES', 'MIEMBROS'], adminGuardarRol: ['ROLES'], adminEliminarRol: ['ROLES'],
@@ -220,6 +242,42 @@ function libroAsistencia() {
   return _libro;
 }
 
+/**
+ * Ejecutar UNA vez desde el editor: la app vuelve a trabajar en su propia hoja ("Mesón Asiste — Asistencia").
+ * Trae de vuelta las pestañas de la app (miembros, roles, jornadas, configuración, sedes, calendario, solicitudes y la
+ * hoja de cada persona, con las marcas que se hicieron mientras estuvo en el otro documento). No borra el otro documento.
+ */
+function volverAMesonAsiste() {
+  const props = PropertiesService.getScriptProperties();
+  const idAnterior = props.getProperty('ID_HOJA_ANTERIOR');
+  if (!idAnterior) return Logger.log('La app ya trabaja en su propia hoja: ' + libroAsistencia().getUrl());
+  const actual = libroAsistencia();
+  const destino = SpreadsheetApp.openById(idAnterior);
+  const nombres = HOJAS_BASE.map(h => h.nombre);
+  const docentes = actual.getSheetByName(DOCENTES.nombre);
+  if (docentes && docentes.getLastRow() > 1) {
+    docentes.getRange(2, DOC.HOJA + 1, docentes.getLastRow() - 1, 1).getValues()
+      .forEach(v => { if (v[0] && nombres.indexOf(String(v[0])) < 0) nombres.push(String(v[0])); });
+  }
+  const traidas = [];
+  nombres.forEach(nombre => {
+    const origen = actual.getSheetByName(nombre);
+    if (!origen) return;
+    // Se reemplaza la pestaña vieja por la más reciente (copia completa: conserva formatos y horas como texto).
+    const vieja = destino.getSheetByName(nombre);
+    const nueva = origen.copyTo(destino);
+    if (vieja) destino.deleteSheet(vieja);
+    nueva.setName(nombre).showSheet();
+    traidas.push(nombre);
+  });
+  props.setProperty('ID_HOJA', destino.getId());
+  props.deleteProperty('ID_HOJA_ANTERIOR');
+  _libro = null; _jornadas = null; _config = null; _roles = null;
+  configurarHojas();
+  Logger.log('Listo: la app volvió a "' + destino.getName() + '". Pestañas actualizadas: ' + traidas.join(', ') +
+    '. Publica una Nueva versión del servidor.');
+}
+
 /** Ejecutar desde el editor para ver en el "Registro de ejecución" el enlace de la hoja que usa el servidor. */
 function verHoja() {
   Logger.log('Hoja de asistencia: ' + libroAsistencia().getUrl());
@@ -232,28 +290,45 @@ function doGet() {
 }
 
 function doPost(e) {
-  const candado = LockService.getScriptLock();
-  candado.waitLock(15000);
+  let datos = {};
   try {
-    const datos = JSON.parse(e.postData.contents);
-    const accion = String(datos.accion || '');
-    if (accion === 'registrarDocente') return json(registrarDocente(datos));
-    if (accion === 'recuperar') return json(recuperar(datos));
-    if (accion === 'iniciarSesion') return json(iniciarSesion(datos));
-    if (accion === 'registrar') return json(registrar(autenticar(datos), datos.marca || {}));
-    if (accion === 'perfil') return json(perfil(autenticar(datos)));
-    if (accion === 'misMarcas') return json(misMarcas(autenticar(datos)));
-    if (accion === 'liberarMiTelefono') return json(liberarMiTelefono(autenticar(datos)));
-    if (accion === 'misSolicitudes') return json(misSolicitudes(autenticar(datos)));
-    if (accion === 'crearSolicitud') return json(crearSolicitud(autenticar(datos), datos.solicitud || {}));
-    if (accion === 'cancelarSolicitud') return json(cancelarSolicitud(autenticar(datos), datos.id));
-    if (accion.indexOf('admin') === 0) return json(administrar(autenticarGestor(datos, accion), datos));
-    return json({ ok: false, mensaje: 'Acción no válida.' });
+    datos = JSON.parse(e.postData.contents);
   } catch (err) {
+    return json({ ok: false, mensaje: 'Petición no válida.', codigo: '' });
+  }
+  const accion = String(datos.accion || '');
+  // Las consultas no esperan turno (varias personas pueden abrir la app a la vez); solo lo que escribe en la hoja.
+  const escribe = SOLO_CONSULTA.indexOf(accion) < 0;
+  const candado = escribe ? LockService.getScriptLock() : null;
+  try {
+    if (candado) candado.waitLock(15000);
+    const respuesta = atender(datos, accion);
+    anotarBitacora(datos, true, respuesta);
+    if (escribe && AFECTA_REPORTES.indexOf(accion) >= 0) cambiaronDatos(accion);
+    return json(respuesta);
+  } catch (err) {
+    anotarBitacora(datos, false, { mensaje: err.message });
     return json({ ok: false, mensaje: err.message, codigo: err.codigo || '' });
   } finally {
-    candado.releaseLock();
+    if (candado) candado.releaseLock();
   }
+}
+
+/** Ejecuta la acción que pide la app y devuelve su respuesta. */
+function atender(datos, accion) {
+  if (accion === 'registrarDocente') return registrarDocente(datos);
+  if (accion === 'recuperar') return recuperar(datos);
+  if (accion === 'iniciarSesion') return iniciarSesion(datos);
+  if (accion === 'registrar') return registrar(autenticar(datos), datos.marca || {});
+  if (accion === 'perfil') return perfil(autenticar(datos), datos);
+  if (accion === 'ranking') return rankingDelMes(autenticar(datos), datos.mes);
+  if (accion === 'misMarcas') return misMarcas(autenticar(datos));
+  if (accion === 'liberarMiTelefono') return liberarMiTelefono(autenticar(datos));
+  if (accion === 'misSolicitudes') return misSolicitudes(autenticar(datos));
+  if (accion === 'crearSolicitud') return crearSolicitud(autenticar(datos), datos.solicitud || {});
+  if (accion === 'cancelarSolicitud') return cancelarSolicitud(autenticar(datos), datos.id);
+  if (accion.indexOf('admin') === 0) return administrar(autenticarGestor(datos, accion), datos);
+  throw new Error('Acción no válida.');
 }
 
 /** Error con un código que la app reconoce (NO_REGISTRADO, ACCESO_CERRADO). */
@@ -418,8 +493,9 @@ function leerRoles() {
   const resultado = {};
   hoja.getDataRange().getValues().slice(1).filter(v => v[0]).forEach(v => {
     const codigo = String(v[0]).trim().toUpperCase();
-    const permisos = codigo === 'ADMINISTRADOR' ? Object.keys(PERMISOS)
-      : String(v[3] || '').split(',').map(p => p.trim().toUpperCase()).filter(p => PERMISOS[p] && p !== 'ROLES');
+    if (codigo === 'SUPERADMIN') return; // rol interno: si una versión anterior lo escribió en la hoja, se ignora
+    // Las funciones del Administrador las decide el super administrador.
+    const permisos = String(v[3] || '').split(',').map(p => p.trim().toUpperCase()).filter(p => PERMISOS[p]);
     resultado[codigo] = {
       codigo: codigo,
       nombre: String(v[1] || codigo),
@@ -427,6 +503,10 @@ function leerRoles() {
       permisos: permisos,
     };
   });
+  // Versiones anteriores escribieron el rol de super administrador en la hoja: se borra esa fila.
+  const filaSuper = buscarFila(hoja, 0, 'superadmin');
+  if (filaSuper) hoja.deleteRow(filaSuper.numero);
+  resultado.SUPERADMIN = ROL_SUPERADMIN;
   if (!resultado.ADMINISTRADOR) resultado.ADMINISTRADOR = { codigo: 'ADMINISTRADOR', nombre: 'Administrador', marca: false, permisos: Object.keys(PERMISOS) };
   if (!resultado.DOCENTE) resultado.DOCENTE = { codigo: 'DOCENTE', nombre: 'Docente', marca: true, permisos: [] };
   _roles = resultado;
@@ -438,11 +518,13 @@ function rolJson(codigo) {
   return { codigo: r.codigo, nombre: r.nombre, marca: r.marca, permisos: r.permisos };
 }
 
-/** ¿El rol tiene esta función? El Administrador las tiene todas. */
+/** ¿El rol tiene esta función? El super administrador las tiene todas. */
 function puede(rol, permiso) {
   const r = leerRoles()[rol];
-  return !!r && (r.codigo === 'ADMINISTRADOR' || r.permisos.indexOf(permiso) >= 0);
+  return !!r && (r.codigo === 'SUPERADMIN' || r.permisos.indexOf(permiso) >= 0);
 }
+
+const esSuperAdmin = rol => rol === 'SUPERADMIN';
 
 /** ¿Las personas con este rol marcan asistencia? */
 function marcaAsistencia(rol) {
@@ -453,5 +535,5 @@ function marcaAsistencia(rol) {
 /** Tiene alguna función de administración (ve el panel Admin). */
 function esGestor(rol) {
   const r = leerRoles()[rol];
-  return !!r && (r.codigo === 'ADMINISTRADOR' || r.permisos.length > 0);
+  return !!r && (r.codigo === 'SUPERADMIN' || r.permisos.length > 0);
 }

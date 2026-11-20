@@ -66,6 +66,7 @@ data class ActividadPorRevisar(
     val salida: String,
     val descripcion: String,
     val ubicacion: String,
+    val correo: String = "",
 )
 
 data class EstadoAdmin(
@@ -79,6 +80,7 @@ data class EstadoAdmin(
     val actividades: List<ActividadPorRevisar>? = null,
     val solicitudes: List<Solicitud>? = null,
     val reporte: ReporteMes? = null,
+    val anual: ReporteAnual? = null,
     val config: AjustesColegio? = null,
     /** Roles del colegio (hoja "Roles"). */
     val roles: List<Rol> = emptyList(),
@@ -90,23 +92,83 @@ data class EstadoAdmin(
 /** Reglas y ubicaciones del colegio (Admin → Ajustes). */
 data class AjustesColegio(val horasMeta: Int, val tolerancia: Int, val sedes: List<Sede>)
 
-/** Una fila del resumen mensual. */
+/** Resumen de una persona en un mes (del reporte mensual o del anual). */
 data class FilaReporte(
+    val mes: String,
+    val correo: String,
     val nombre: String,
     val rol: String,
     val jornada: String,
     val dias: Int,
     val puntuales: Int,
     val tardes: Int,
+    val minutosTarde: Long,
+    val salidasAnticipadas: Int,
     val faltas: Int,
+    val incompletos: Int,
     val actividades: Int,
+    val libres: Int,
     val minutos: Long,
     val minutosExtra: Long,
     val porRevisar: Int,
+) {
+    companion object {
+        fun deJson(j: JSONObject, mes: String) = FilaReporte(
+            mes = j.optString("mes", mes),
+            correo = j.optString("correo"),
+            nombre = j.optString("nombre"),
+            rol = j.optString("rol"),
+            jornada = j.optString("jornada"),
+            dias = j.optInt("dias"),
+            puntuales = j.optInt("puntuales"),
+            tardes = j.optInt("tardes"),
+            minutosTarde = j.optLong("minutosTarde"),
+            salidasAnticipadas = j.optInt("salidasAnticipadas"),
+            faltas = j.optInt("faltas"),
+            incompletos = j.optInt("incompletos"),
+            actividades = j.optInt("actividades"),
+            libres = j.optInt("libres"),
+            minutos = j.optLong("minutos"),
+            minutosExtra = j.optLong("extra"),
+            porRevisar = j.optInt("porRevisar"),
+        )
+
+        /** Suma varias filas (por ejemplo, los meses de una persona o todo el personal). */
+        fun total(nombre: String, filas: List<FilaReporte>) = FilaReporte(
+            mes = "", correo = "", nombre = nombre, rol = "", jornada = "",
+            dias = filas.sumOf { it.dias }, puntuales = filas.sumOf { it.puntuales }, tardes = filas.sumOf { it.tardes },
+            minutosTarde = filas.sumOf { it.minutosTarde }, salidasAnticipadas = filas.sumOf { it.salidasAnticipadas },
+            faltas = filas.sumOf { it.faltas }, incompletos = filas.sumOf { it.incompletos },
+            actividades = filas.sumOf { it.actividades }, libres = filas.sumOf { it.libres },
+            minutos = filas.sumOf { it.minutos }, minutosExtra = filas.sumOf { it.minutosExtra },
+            porRevisar = filas.sumOf { it.porRevisar },
+        )
+    }
+}
+
+/** Un día de una persona en el reporte mensual. */
+data class DiaReporte(
+    val nombre: String,
+    val fecha: String,
+    val entrada: String,
+    val salida: String,
+    val horas: String,
+    /** Puntual, Tarde, Actividad especial, Falta o Día libre. */
+    val estado: String,
+    /** Asistió, Parcial, En curso, Inasistencia, Vacaciones… */
+    val estadoDia: String,
+    val minutosTarde: String,
+    val minutosAntes: String,
+    val extra: String,
+    val revision: String,
+    val observacion: String,
 )
 
-/** Reporte de un mes: tarjetas en la app y archivo CSV para Excel. */
-data class ReporteMes(val titulo: String, val archivo: String, val csv: String, val filas: List<FilaReporte>)
+/** Reporte de un mes ("2026-11"): resumen por persona y detalle por día. */
+data class ReporteMes(val mes: String, val filas: List<FilaReporte>, val detalle: List<DiaReporte>)
+
+/** Resumen de un año: una fila por persona y mes. */
+data class ReporteAnual(val anio: String, val meses: List<String>, val filas: List<FilaReporte>)
 
 /** Panel del administrador: todo se lee y se guarda directamente en el servidor (necesita internet). */
 class AdminViewModel(app: Application) : AndroidViewModel(app) {
@@ -156,7 +218,7 @@ class AdminViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Guarda rol, jornada y estado (activo/inactivo) de un miembro. */
-    fun guardarMiembro(miembro: Miembro, rol: String, jornada: String, activo: Boolean) = ejecutar {
+    fun guardarMiembro(miembro: Miembro, rol: String, jornada: String, activo: Boolean) = guardarEnServidor {
         var r = pedir("adminAsignar", JSONObject().put("objetivo", miembro.correo).put("rol", rol).put("jornada", jornada))
         if (activo != miembro.activo) {
             r = pedir("adminEstado", JSONObject().put("objetivo", miembro.correo).put("estado", if (activo) "ACTIVO" else "INACTIVO"))
@@ -166,7 +228,7 @@ class AdminViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Eliminar: se le cierra el acceso y deja de aparecer (su historial queda en la hoja). */
-    fun eliminarMiembro(miembro: Miembro) = ejecutar {
+    fun eliminarMiembro(miembro: Miembro) = guardarEnServidor {
         val r = pedir("adminEliminarMiembro", JSONObject().put("objetivo", miembro.correo))
         aviso(r.optString("mensaje"))
         leerMiembros()
@@ -182,19 +244,19 @@ class AdminViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Crea (código vacío) o edita una jornada. */
-    fun guardarJornada(horario: Horario) = ejecutar {
+    fun guardarJornada(horario: Horario) = guardarEnServidor {
         val r = pedir("adminGuardarJornada", JSONObject().put("jornada", horario.aJson()))
         aviso(r.optString("mensaje"))
         leerJornadas()
     }
 
-    fun eliminarJornada(horario: Horario) = ejecutar {
+    fun eliminarJornada(horario: Horario) = guardarEnServidor {
         val r = pedir("adminEliminarJornada", JSONObject().put("codigo", horario.codigo))
         aviso(r.optString("mensaje"))
         leerJornadas()
     }
 
-    fun liberarTelefono(miembro: Miembro) = ejecutar {
+    fun liberarTelefono(miembro: Miembro) = guardarEnServidor {
         val r = pedir("adminLiberar", JSONObject().put("objetivo", miembro.correo))
         aviso(r.optString("mensaje"))
         leerMiembros()
@@ -210,13 +272,13 @@ class AdminViewModel(app: Application) : AndroidViewModel(app) {
         _estado.update { it.copy(eventos = lista(r.getJSONArray("eventos"), Evento::deJson).sortedBy { e -> e.desde }) }
     }
 
-    fun agregarEvento(evento: Evento) = ejecutar {
+    fun agregarEvento(evento: Evento) = guardarEnServidor {
         val r = pedir("adminAgregarEvento", JSONObject().put("evento", evento.aJson()))
         aviso(r.optString("mensaje"))
         leerEventos()
     }
 
-    fun eliminarEvento(evento: Evento) = ejecutar {
+    fun eliminarEvento(evento: Evento) = guardarEnServidor {
         val r = pedir("adminEliminarEvento", JSONObject().put("id", evento.id))
         aviso(r.optString("mensaje"))
         leerEventos()
@@ -235,11 +297,12 @@ class AdminViewModel(app: Application) : AndroidViewModel(app) {
                 salida = j.optString("salida"),
                 descripcion = j.optString("descripcion"),
                 ubicacion = j.optString("ubicacion"),
+                correo = j.optString("correo"),
             )
         }) }
     }
 
-    fun revisarActividad(actividad: ActividadPorRevisar, aprobar: Boolean) = ejecutar {
+    fun revisarActividad(actividad: ActividadPorRevisar, aprobar: Boolean) = guardarEnServidor {
         val r = pedir("adminRevisarActividad", JSONObject().put("id", actividad.id).put("aprobar", aprobar))
         aviso(r.optString("mensaje"))
         leerActividades()
@@ -257,13 +320,13 @@ class AdminViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Crea (código vacío) o edita un rol: nombre, si marca asistencia y sus funciones. */
-    fun guardarRol(rol: Rol) = ejecutar {
+    fun guardarRol(rol: Rol) = guardarEnServidor {
         val r = pedir("adminGuardarRol", JSONObject().put("rol", rol.aJson()))
         aviso(r.optString("mensaje"))
         leerRoles()
     }
 
-    fun eliminarRol(rol: Rol) = ejecutar {
+    fun eliminarRol(rol: Rol) = guardarEnServidor {
         val r = pedir("adminEliminarRol", JSONObject().put("codigo", rol.codigo))
         aviso(r.optString("mensaje"))
         leerRoles()
@@ -279,7 +342,7 @@ class AdminViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Aprobar agrega el permiso al calendario de la persona (lo hace el servidor). */
-    fun revisarSolicitud(s: Solicitud, aprobar: Boolean, respuesta: String) = ejecutar {
+    fun revisarSolicitud(s: Solicitud, aprobar: Boolean, respuesta: String) = guardarEnServidor {
         val r = pedir("adminRevisarSolicitud", JSONObject().put("id", s.id).put("aprobar", aprobar).put("respuesta", respuesta.trim()))
         aviso(r.optString("mensaje"))
         leerSolicitudes()
@@ -287,54 +350,40 @@ class AdminViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------- Reporte mensual ----------
 
-    /** [hace] = 0 este mes, 1 el mes pasado, 2 hace dos meses. */
-    fun generarReporte(hace: Int) = ejecutar {
-        val cal = java.util.Calendar.getInstance().apply { add(java.util.Calendar.MONTH, -hace) }
-        val mes = "%04d-%02d".format(cal.get(java.util.Calendar.YEAR), cal.get(java.util.Calendar.MONTH) + 1)
-        val titulo = formatear("MMMM yyyy", cal.timeInMillis)
-        val r = pedir("adminReporte", JSONObject().put("mes", mes))
-        val filas = lista(r.getJSONArray("resumen")) { j ->
-            FilaReporte(
-                nombre = j.optString("nombre"),
-                rol = j.optString("rol"),
-                jornada = j.optString("jornada"),
-                dias = j.optInt("dias"),
-                puntuales = j.optInt("puntuales"),
-                tardes = j.optInt("tardes"),
-                faltas = j.optInt("faltas"),
-                actividades = j.optInt("actividades"),
-                minutos = j.optLong("minutos"),
-                minutosExtra = j.optLong("extra"),
-                porRevisar = j.optInt("porRevisar"),
-            )
-        }
-        val detalle = r.getJSONArray("detalle")
-        _estado.update { it.copy(reporte = ReporteMes(titulo, "asistencia_$mes.csv", csvReporte(titulo, filas, detalle), filas)) }
+    /** Actualiza ahora las pestañas Resumen Global, Estado Global y Excepciones de la hoja de cálculo. */
+    fun actualizarHoja() = guardarEnServidor {
+        aviso(pedir("adminActualizarReportes").optString("mensaje", "Pestañas de la hoja actualizadas."))
     }
 
-    /** CSV con ";" y BOM UTF-8 para que Excel en español lo abra bien (tildes y columnas). */
-    private fun csvReporte(titulo: String, filas: List<FilaReporte>, detalle: JSONArray): String {
-        fun celda(v: Any?) = v.toString().replace(";", ",").replace("\n", " ")
-        fun horas(m: Long) = "%d:%02d".format(m / 60, m % 60)
-        return buildString {
-            append('﻿')
-            append("Colegio Mesón — Asistencia de ${celda(titulo)}\n\n")
-            append("RESUMEN\n")
-            append("Nombre;Rol;Jornada;Días asistidos;Puntuales;Tarde;Faltas;Actividades especiales;Horas;Horas extra verificadas;Días por revisar\n")
-            filas.forEach { f ->
-                append(listOf(f.nombre, f.rol, f.jornada, f.dias, f.puntuales, f.tardes, f.faltas, f.actividades,
-                    horas(f.minutos), horas(f.minutosExtra), f.porRevisar).joinToString(";") { celda(it) })
-                append('\n')
-            }
-            append("\nDETALLE POR DÍA\n")
-            append("Nombre;Fecha;Entrada;Salida;Horas;Estado;Revisión\n")
-            for (i in 0 until detalle.length()) {
-                val d = detalle.getJSONObject(i)
-                append(listOf("nombre", "fecha", "entrada", "salida", "horas", "estado", "revision")
-                    .joinToString(";") { celda(d.optString(it)) })
-                append('\n')
-            }
+    /** Reporte de un mes ("2026-11"): resumen por persona y detalle por día. */
+    fun generarReporte(mes: String) = ejecutar {
+        val r = pedir("adminReporte", JSONObject().put("mes", mes))
+        val filas = lista(r.getJSONArray("resumen")) { FilaReporte.deJson(it, mes) }
+        val detalle = lista(r.getJSONArray("detalle")) { d ->
+            DiaReporte(
+                nombre = d.optString("nombre"),
+                fecha = d.optString("fecha"),
+                entrada = d.optString("entrada"),
+                salida = d.optString("salida"),
+                horas = d.optString("horas"),
+                estado = d.optString("estado"),
+                estadoDia = d.optString("estadoDia", d.optString("estado")),
+                minutosTarde = d.optString("minutosTarde"),
+                minutosAntes = d.optString("minutosAntes"),
+                extra = d.optString("extra"),
+                revision = d.optString("revision").takeIf { it != "No aplica" }.orEmpty(),
+                observacion = d.optString("observacion"),
+            )
         }
+        _estado.update { it.copy(reporte = ReporteMes(mes, filas, detalle)) }
+    }
+
+    /** Resumen de un año ("2026"): totales por persona y por mes. */
+    fun cargarAnual(anio: String) = ejecutar {
+        val r = pedir("adminResumenAnual", JSONObject().put("anio", anio))
+        val meses = r.optJSONArray("meses")?.let { a -> (0 until a.length()).map { a.getString(it) } }.orEmpty()
+        val filas = lista(r.getJSONArray("filas")) { FilaReporte.deJson(it, "") }
+        _estado.update { it.copy(anual = ReporteAnual(r.optString("anio", anio), meses, filas)) }
     }
 
     // ---------- Ajustes: reglas y ubicación del colegio ----------
@@ -348,7 +397,7 @@ class AdminViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun guardarReglas(horasMeta: Int, tolerancia: Int) = ejecutar {
+    fun guardarReglas(horasMeta: Int, tolerancia: Int) = guardarEnServidor {
         val r = pedir("adminGuardarReglas", JSONObject().put("horasMeta", horasMeta).put("tolerancia", tolerancia))
         aviso(r.optString("mensaje"))
         leerAjustes()
@@ -358,7 +407,7 @@ class AdminViewModel(app: Application) : AndroidViewModel(app) {
      * Crea ([original] = null) o edita la ubicación del colegio. [punto] = coordenadas elegidas a mano;
      * null = el lugar donde está parado el administrador ahora. Al editar, [moverAqui] = false conserva el punto.
      */
-    fun guardarSede(original: Sede?, nombre: String, radio: Int, punto: Pair<Double, Double>?, moverAqui: Boolean) = ejecutar {
+    fun guardarSede(original: Sede?, nombre: String, radio: Int, punto: Pair<Double, Double>?, moverAqui: Boolean) = guardarEnServidor {
         val (lat, lon) = when {
             punto != null -> punto
             original != null && !moverAqui -> original.latitud to original.longitud
@@ -382,14 +431,14 @@ class AdminViewModel(app: Application) : AndroidViewModel(app) {
         return lectura.latitud to lectura.longitud
     }
 
-    fun eliminarSede(sede: Sede) = ejecutar {
+    fun eliminarSede(sede: Sede) = guardarEnServidor {
         val r = pedir("adminEliminarSede", JSONObject().put("id", sede.id))
         aviso(r.optString("mensaje"))
         leerAjustes()
     }
 
     /** Elige cómo se comprueba la presencia. Con Wi-Fi registra las redes que este teléfono ve ahora. */
-    fun guardarVerificacion(sede: Sede, metodo: MetodoVerificacion, registrarWifi: Boolean) = ejecutar {
+    fun guardarVerificacion(sede: Sede, metodo: MetodoVerificacion, registrarWifi: Boolean) = guardarEnServidor {
         val app = getApplication<Application>()
         val datos = JSONObject().put("id", sede.id).put("metodo", metodo.name)
         if (metodo == MetodoVerificacion.WIFI && (registrarWifi || sede.wifi.isEmpty())) {
@@ -428,8 +477,23 @@ class AdminViewModel(app: Application) : AndroidViewModel(app) {
     private fun <T> lista(arreglo: JSONArray, convertir: (JSONObject) -> T): List<T> =
         (0 until arreglo.length()).map { convertir(arreglo.getJSONObject(it)) }
 
+    /** Cuántas consultas o cambios van en camino (la barra de progreso se ve mientras haya alguno). */
+    private var enCurso = 0
+    private var guardando = false
+
+    /** Un cambio (guardar, eliminar, revisar…): no se manda dos veces si se toca el botón otra vez. */
+    private fun guardarEnServidor(bloque: suspend () -> Unit) {
+        if (guardando) return
+        guardando = true
+        ejecutar { try { bloque() } finally { guardando = false } }
+    }
+
+    /**
+     * Consultas: varias pueden ir a la vez (cambiar de sección no espera a que termine la actualización
+     * automática) y lo que ya se mostró se queda en pantalla mientras llega lo nuevo.
+     */
     private fun ejecutar(bloque: suspend () -> Unit) = viewModelScope.launch {
-        if (_estado.value.cargando) return@launch
+        enCurso++
         _estado.update { it.copy(cargando = true) }
         try {
             bloque()
@@ -445,7 +509,8 @@ class AdminViewModel(app: Application) : AndroidViewModel(app) {
             } else e.message ?: "Ocurrió un error inesperado."
             _estado.update { it.copy(mensaje = Mensaje(texto, error = true)) }
         } finally {
-            _estado.update { it.copy(cargando = false) }
+            enCurso--
+            _estado.update { it.copy(cargando = enCurso > 0) }
         }
     }
 }

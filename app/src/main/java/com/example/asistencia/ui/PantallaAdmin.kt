@@ -5,6 +5,14 @@
 package com.example.asistencia.ui
 
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -94,12 +102,22 @@ private enum class SeccionAdmin(val etiqueta: String, val permiso: Permiso) {
 }
 
 @Composable
-fun PantallaAdmin(avisos: SnackbarHostState, perfil: Perfil, vm: AdminViewModel = viewModel()) {
+fun PantallaAdmin(avisos: SnackbarHostState, perfil: Perfil, miCorreo: String = "", vm: AdminViewModel = viewModel()) {
     val estado by vm.estado.collectAsState()
     val administrador = perfil.esAdministrador
     val secciones = SeccionAdmin.entries.filter { perfil.puede(it.permiso) }
     var seccion by rememberSaveable { mutableStateOf(secciones.firstOrNull() ?: SeccionAdmin.HOY) }
     if (seccion !in secciones && secciones.isNotEmpty()) seccion = secciones.first()
+    // Se cambia de pestaña deslizando la pantalla a los lados (o tocando las pestañas de arriba).
+    val paginas = rememberPagerState(initialPage = secciones.indexOf(seccion).coerceAtLeast(0)) { secciones.size }
+    val pestanas = rememberLazyListState()
+    val alcance = rememberCoroutineScope()
+    LaunchedEffect(paginas.settledPage, secciones.size) {
+        secciones.getOrNull(paginas.settledPage)?.let { seccion = it }
+    }
+    LaunchedEffect(paginas.currentPage) {
+        if (secciones.isNotEmpty()) pestanas.animateScrollToItem((paginas.currentPage - 1).coerceAtLeast(0))
+    }
 
     LaunchedEffect(estado.mensaje) {
         val mensaje = estado.mensaje ?: return@LaunchedEffect
@@ -118,38 +136,56 @@ fun PantallaAdmin(avisos: SnackbarHostState, perfil: Perfil, vm: AdminViewModel 
             SeccionAdmin.REPORTES -> Unit
         }
     }
-    LaunchedEffect(seccion) { cargar() }
+    // Se actualiza al volver a la app y cada 2 minutos (cambios hechos en la hoja de Google).
+    AlVolverYCada(120_000, seccion) { cargar() }
 
-    Pantalla {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.weight(1f)) {
-                Titulo("Administración", if (administrador) "Control del personal en tiempo real." else "${perfil.rol.nombre}: tus funciones de administración.")
-            }
-            TextButton(onClick = { cargar() }, enabled = !estado.cargando) { Text("Actualizar") }
-        }
-        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            secciones.forEach { s ->
-                val pendientes = when (s) {
-                    SeccionAdmin.ACTIVIDADES -> estado.actividades?.size ?: 0
-                    SeccionAdmin.SOLICITUDES -> estado.solicitudes?.count { it.pendiente } ?: 0
-                    else -> 0
+    Column(Modifier.fillMaxSize()) {
+        Column(
+            Modifier.padding(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 4.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.weight(1f)) {
+                    Titulo("Administración", if (administrador) "Control del personal en tiempo real." else "${perfil.rol.nombre}: tus funciones de administración.")
                 }
-                val etiqueta = if (pendientes > 0) "${s.etiqueta} ($pendientes)" else s.etiqueta
-                FilterChip(selected = seccion == s, onClick = { seccion = s }, label = { Text(etiqueta) })
+                TextButton(onClick = { cargar() }, enabled = !estado.cargando) { Text("Actualizar") }
+            }
+            LazyRow(state = pestanas, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                itemsIndexed(secciones) { i, s ->
+                    val pendientes = when (s) {
+                        SeccionAdmin.ACTIVIDADES -> estado.actividades?.count { !it.correo.equals(miCorreo, true) } ?: 0
+                        SeccionAdmin.SOLICITUDES -> estado.solicitudes?.count { it.pendiente && !it.correo.equals(miCorreo, true) } ?: 0
+                        else -> 0
+                    }
+                    val etiqueta = if (pendientes > 0) "${s.etiqueta} ($pendientes)" else s.etiqueta
+                    FilterChip(
+                        selected = paginas.currentPage == i,
+                        onClick = { alcance.launch { paginas.animateScrollToPage(i) } },
+                        label = { Text(etiqueta) },
+                    )
+                }
+            }
+            Box(Modifier.fillMaxWidth().height(4.dp)) {
+                if (estado.cargando) LinearProgressIndicator(Modifier.fillMaxWidth())
             }
         }
-        if (estado.cargando) {
-            LinearProgressIndicator(Modifier.fillMaxWidth())
-        }
-        when (seccion) {
-            SeccionAdmin.HOY -> SeccionHoy(estado.hoy, perfil, vm)
-            SeccionAdmin.SOLICITUDES -> SeccionSolicitudes(estado, vm)
-            SeccionAdmin.MIEMBROS -> SeccionMiembros(estado, vm, editable = perfil.puede(Permiso.MIEMBROS), perfil = perfil)
-            SeccionAdmin.JORNADAS -> SeccionJornadas(estado, vm, perfil.metaMinutos)
-            SeccionAdmin.ROLES -> SeccionRoles(estado, vm)
-            SeccionAdmin.CALENDARIO -> SeccionCalendario(estado, vm)
-            SeccionAdmin.ACTIVIDADES -> SeccionActividades(estado.actividades, vm)
-            SeccionAdmin.REPORTES -> SeccionReportes(estado, vm)
+        HorizontalPager(state = paginas, modifier = Modifier.weight(1f), beyondViewportPageCount = 0) { pagina ->
+            Column(
+                Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                when (secciones[pagina]) {
+                    SeccionAdmin.HOY -> SeccionHoy(estado.hoy, perfil, vm)
+                    SeccionAdmin.SOLICITUDES -> SeccionSolicitudes(estado, vm, miCorreo)
+                    SeccionAdmin.MIEMBROS -> SeccionMiembros(estado, vm, editable = perfil.puede(Permiso.MIEMBROS), perfil = perfil)
+                    SeccionAdmin.JORNADAS -> SeccionJornadas(estado, vm, perfil.metaMinutos)
+                    SeccionAdmin.ROLES -> SeccionRoles(estado, vm, perfil)
+                    SeccionAdmin.CALENDARIO -> SeccionCalendario(estado, vm)
+                    SeccionAdmin.ACTIVIDADES -> SeccionActividades(estado.actividades, vm, miCorreo)
+                    SeccionAdmin.REPORTES -> SeccionReportes(estado, vm)
+                }
+                Spacer(Modifier.height(8.dp))
+            }
         }
     }
 }
@@ -281,7 +317,7 @@ private fun SeccionMiembros(estado: EstadoAdmin, vm: AdminViewModel, editable: B
             miembro = m,
             horarios = estado.horarios,
             // Dar o quitar un rol con funciones de administración requiere la función "Gestionar roles".
-            roles = estado.roles.filter { perfil.puede(Permiso.ROLES) || !it.gestiona || it.codigo == m.rol },
+            roles = estado.roles.filter { r -> r.codigo == m.rol || (if (r.protegido) perfil.rol.esSuperAdmin else perfil.puede(Permiso.ROLES) || !r.gestiona) },
             onCerrar = { editando = null },
             onGuardar = { rol, jornada, activo ->
                 vm.guardarMiembro(m, rol, jornada, activo)
@@ -607,7 +643,7 @@ private fun AvisoHorario(entrada: String, salida: String) {
 fun descripcionRol(r: Rol): String {
     val marca = if (r.marca) "Marca entrada, salida y permisos" else "No marca asistencia"
     val funciones = when {
-        r.esAdministrador -> "todas las funciones de administración"
+        r.esSuperAdmin -> "todas las funciones, y decide las del Administrador"
         r.permisos.isEmpty() -> "sin funciones de administración"
         else -> r.permisos.sortedBy { it.ordinal }.joinToString(", ") { it.etiqueta.lowercase() }
     }
@@ -615,10 +651,11 @@ fun descripcionRol(r: Rol): String {
 }
 
 @Composable
-private fun SeccionRoles(estado: EstadoAdmin, vm: AdminViewModel) {
+private fun SeccionRoles(estado: EstadoAdmin, vm: AdminViewModel, perfil: Perfil) {
     var editando by remember { mutableStateOf<Rol?>(null) }
     var nuevo by remember { mutableStateOf(false) }
     var eliminando by remember { mutableStateOf<Rol?>(null) }
+    val superAdmin = perfil.rol.esSuperAdmin
 
     Button(
         onClick = { nuevo = true },
@@ -627,13 +664,15 @@ private fun SeccionRoles(estado: EstadoAdmin, vm: AdminViewModel) {
     ) { Text("+ Nuevo rol", maxLines = 1) }
     Text(
         "Elige qué hace cada rol: si marca asistencia y qué funciones de administración tiene. " +
-            "Administrador y Docente no se pueden eliminar.",
+            (if (superAdmin) "Tú decides también las funciones del Administrador. "
+            else "Los roles Super administrador y Administrador solo los cambia el super administrador. ") +
+            "Los roles fijos no se pueden eliminar.",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
 
     if (nuevo || editando != null) {
-        DialogoRol(editando, onCerrar = { nuevo = false; editando = null }) {
+        DialogoRol(editando, superAdmin, onCerrar = { nuevo = false; editando = null }) {
             vm.guardarRol(it)
             nuevo = false
             editando = null
@@ -668,8 +707,13 @@ private fun SeccionRoles(estado: EstadoAdmin, vm: AdminViewModel) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Row {
-                    TextButton(onClick = { editando = r }) { Text("Editar") }
-                    if (r.codigo != "ADMINISTRADOR" && r.codigo != "DOCENTE") {
+                    if (!r.protegido || superAdmin) TextButton(onClick = { editando = r }) { Text("Editar") }
+                    else Text(
+                        "Solo lo cambia el super administrador",
+                        style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline,
+                        modifier = Modifier.padding(vertical = 12.dp),
+                    )
+                    if (!r.protegido && r.codigo != "DOCENTE") {
                         TextButton(onClick = { eliminando = r }) { Text("Eliminar", color = MaterialTheme.colorScheme.error) }
                     }
                 }
@@ -679,11 +723,12 @@ private fun SeccionRoles(estado: EstadoAdmin, vm: AdminViewModel) {
 }
 
 @Composable
-private fun DialogoRol(original: Rol?, onCerrar: () -> Unit, onGuardar: (Rol) -> Unit) {
+private fun DialogoRol(original: Rol?, superAdmin: Boolean, onCerrar: () -> Unit, onGuardar: (Rol) -> Unit) {
     var nombre by remember { mutableStateOf(original?.nombre.orEmpty()) }
     var marca by remember { mutableStateOf(original?.marca ?: true) }
     var permisos by remember { mutableStateOf(original?.permisos.orEmpty()) }
-    val administrador = original?.esAdministrador == true
+    // El Super administrador tiene siempre todas las funciones.
+    val administrador = original?.esSuperAdmin == true
     AlertDialog(
         onDismissRequest = onCerrar,
         title = { Text(if (original == null) "Nuevo rol" else "Editar rol") },
@@ -713,12 +758,12 @@ private fun DialogoRol(original: Rol?, onCerrar: () -> Unit, onGuardar: (Rol) ->
                 Text("Funciones de administración", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
                 if (administrador) {
                     Text(
-                        "El Administrador tiene siempre todas las funciones.",
+                        "El Super administrador tiene siempre todas las funciones.",
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 } else {
-                    // "Gestionar roles" es solo del Administrador.
-                    Permiso.entries.filter { it != Permiso.ROLES }.forEach { p ->
+                    // "Gestionar roles" solo la puede dar el super administrador.
+                    Permiso.entries.filter { it != Permiso.ROLES || superAdmin }.forEach { p ->
                         val marcado = p in permisos
                         Row(
                             Modifier.fillMaxWidth().heightIn(min = 44.dp)
@@ -771,7 +816,7 @@ private fun SeccionCalendario(estado: EstadoAdmin, vm: AdminViewModel) {
     if (agregando) {
         // Solo personas cuyo rol marca asistencia.
         val marcan = estado.miembros.orEmpty().filter { m ->
-            m.activo && m.rol != "ADMINISTRADOR" && estado.roles.firstOrNull { it.codigo == m.rol }?.marca != false
+            m.activo && estado.roles.firstOrNull { it.codigo == m.rol }?.marca != false
         }
         DialogoEvento(marcan, onCerrar = { agregando = false }) {
             vm.agregarEvento(it)
@@ -1013,7 +1058,7 @@ private fun DialogoEvento(miembros: List<Miembro>, onCerrar: () -> Unit, onAgreg
 // ---------- Actividades especiales ----------
 
 @Composable
-private fun SeccionActividades(actividades: List<ActividadPorRevisar>?, vm: AdminViewModel) {
+private fun SeccionActividades(actividades: List<ActividadPorRevisar>?, vm: AdminViewModel, miCorreo: String) {
     actividades ?: return
     val enlaces = LocalUriHandler.current
     if (actividades.isEmpty()) {
@@ -1038,7 +1083,12 @@ private fun SeccionActividades(actividades: List<ActividadPorRevisar>?, vm: Admi
                 if (a.ubicacion.isNotEmpty()) {
                     TextButton(onClick = { runCatching { enlaces.openUri(a.ubicacion) } }) { Text("Ver ubicación en el mapa") }
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (miCorreo.isNotBlank() && a.correo.equals(miCorreo, ignoreCase = true)) {
+                    Text(
+                        "Es tu actividad: debe revisarla otro supervisor o el administrador.",
+                        style = MaterialTheme.typography.bodySmall, color = colorAviso, fontWeight = FontWeight.Medium,
+                    )
+                } else Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     OutlinedButton(onClick = { vm.revisarActividad(a, aprobar = false) }, modifier = Modifier.weight(1f)) {
                         Text("Rechazar", color = MaterialTheme.colorScheme.error)
                     }

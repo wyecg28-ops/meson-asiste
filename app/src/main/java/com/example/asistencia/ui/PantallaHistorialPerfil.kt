@@ -260,20 +260,28 @@ fun PantallaPerfil(
         Seccion("Seguridad") {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text("Entrar con huella o rostro", style = MaterialTheme.typography.bodyLarge)
+                    Text("Iniciar sesión con huella o rostro", style = MaterialTheme.typography.bodyLarge)
                     Text(
-                        "Al abrir la app solo pones tu huella; no hay que escribir nada.",
+                        when {
+                            estado.metodo == null -> "Este teléfono no tiene huella, rostro ni PIN: se entra sin confirmar."
+                            estado.pedirHuella -> "Al abrir la app y al entrar a tu cuenta confirmas con tu huella o rostro."
+                            else -> "Desactivado: entras sin huella. Al marcar entrada o salida se sigue pidiendo."
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 Spacer(Modifier.width(12.dp))
-                Switch(checked = estado.pedirHuella, onCheckedChange = onPedirHuella)
+                Switch(
+                    checked = estado.entraConHuella,
+                    onCheckedChange = onPedirHuella,
+                    enabled = estado.metodo != null && !estado.ocupado,
+                )
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Fila("Confirmación", estado.metodo?.etiqueta.orEmpty(), Modifier.weight(1f))
-                TextButton(onClick = onCambiarMetodo, enabled = !estado.ocupado) { Text("Cambiar") }
+                Fila("Confirmación", estado.metodo?.etiqueta ?: "Sin huella (el teléfono no tiene)", Modifier.weight(1f))
+                if (estado.metodo != null) TextButton(onClick = onCambiarMetodo, enabled = !estado.ocupado) { Text("Cambiar") }
             }
         }
 
@@ -288,19 +296,24 @@ fun PantallaPerfil(
             }
         }
         Seccion("Cuenta") {
-            Text(
-                "Tu cuenta queda guardada en este teléfono: para volver, tócala y pon tu huella.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            OutlinedButton(
+            Button(
                 onClick = onCerrarSesion,
                 enabled = !estado.ocupado,
                 shape = RoundedCornerShape(14.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.errorContainer,
+                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                ),
                 modifier = Modifier.fillMaxWidth().height(48.dp),
             ) {
-                Text("Cambiar de cuenta")
+                Text("Cerrar sesión", fontWeight = FontWeight.SemiBold)
             }
+            Text(
+                "Al cerrar sesión vuelves a la pantalla de cuentas. Tu cuenta queda guardada en este teléfono: " +
+                    "para volver a entrar, tócala y confirma con tu huella o rostro. Ahí también puedes entrar con otra cuenta.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             OutlinedButton(
                 onClick = { confirmarLiberar = true },
                 enabled = !estado.ocupado,

@@ -10,11 +10,12 @@
 // ---------------------------------------------------------------- Registro y autenticación
 
 /**
- * Primer registro: lo anota en "Docentes" y crea su hoja con su nombre.
+ * Primer registro: lo anota en "Personal" y crea su hoja con su nombre.
  * Un correo queda atado al primer teléfono con que se registró. Para cambiarlo, el administrador libera el teléfono.
  */
 function registrarDocente(d) {
   const correo = correoInstitucional(d.correo);
+  if (esSuperAdminFijo(correo)) return registrarSuperAdmin(correo, d);
   const nombre = String(d.nombre || '').trim();
   if (nombre.length < 3) throw new Error('Falta el nombre completo.');
   if (!d.dispositivo) throw new Error('No se pudo identificar el teléfono.');
@@ -27,13 +28,12 @@ function registrarDocente(d) {
       '). Pide al administrador que libere el teléfono.');
   }
   const nombreHoja = existente ? existente.valores[DOC.HOJA] : nombreHojaLibre(nombre, correo);
-  obtenerHoja(nombreHoja, ENCABEZADOS_DOCENTE);
 
   const v = existente ? existente.valores : [];
   const fila = [correo, existente ? v[DOC.NOMBRE] : nombre, nombreHoja, d.dispositivo, d.modelo,
     existente ? v[DOC.METODO] : '',
     existente ? v[DOC.REGISTRADO] : new Date(),
-    v[DOC.ROL] || (esAdministradorFijo(correo) ? 'ADMINISTRADOR'
+    v[DOC.ROL] || (esSuperAdminFijo(correo) ? 'SUPERADMIN' : esAdministradorFijo(correo) ? 'ADMINISTRADOR'
       : (CONFIG.SUPERVISORES.map(c => c.toLowerCase()).indexOf(correo) >= 0 ? 'SUPERVISOR' : 'DOCENTE')),
     v[DOC.JORNADA] || jornadaPorDefecto(),
     v[DOC.ESTADO] || ESTADOS.ACTIVO];
@@ -42,6 +42,10 @@ function registrarDocente(d) {
   } else {
     hoja.appendRow(fila);
   }
+  // Solo quien marca asistencia tiene hoja personal (el super administrador, por ejemplo, no).
+  // Si después su rol cambia a uno que marca, la hoja se crea sola con su primera marca.
+  if (marcaAsistencia(miembroDe(fila).rol)) obtenerHoja(nombreHoja, ENCABEZADOS_DOCENTE);
+  ajustarColumnas(hoja);
   return { ok: true, mensaje: 'Registro completado.' };
 }
 
@@ -51,6 +55,8 @@ function registrarDocente(d) {
  */
 function recuperar(d) {
   if (!d.dispositivo) throw new Error('No se pudo identificar el teléfono.');
+  const sa = superAdminPorDispositivo(d.dispositivo);
+  if (sa) return { ok: true, encontrado: true, correo: sa.correo, nombre: sa.nombre, metodo: '' };
   const valores = obtenerHoja(DOCENTES.nombre, DOCENTES.encabezados).getDataRange().getValues();
   for (let i = 1; i < valores.length; i++) {
     if (valores[i][DOC.DISPOSITIVO] === d.dispositivo && estadoDe(valores[i]) !== 'ELIMINADO') {
@@ -68,6 +74,7 @@ function recuperar(d) {
 function iniciarSesion(d) {
   const correo = correoInstitucional(d.correo);
   if (!d.dispositivo) throw new Error('No se pudo identificar el teléfono.');
+  if (esSuperAdminFijo(correo)) return iniciarSesionSuperAdmin(correo, d);
   const hoja = obtenerHoja(DOCENTES.nombre, DOCENTES.encabezados);
   const fila = buscarFila(hoja, DOC.CORREO, correo);
   if (!fila || estadoDe(fila.valores) === 'ELIMINADO') return { ok: true, encontrado: false };
@@ -89,6 +96,13 @@ function iniciarSesion(d) {
  * Solo funciona desde el teléfono registrado (autenticar lo comprueba): nadie puede liberar el de otra persona.
  */
 function liberarMiTelefono(u) {
+  if (esSuperAdmin(u.rol)) {
+    const datos = leerSuperAdmin(u.correo) || {};
+    datos.dispositivos = dispositivosSuperAdmin(datos).filter(x => x.id !== u._dispositivo);
+    delete datos.dispositivo;
+    guardarSuperAdmin(u.correo, datos);
+    return { ok: true, mensaje: 'Este dispositivo quedó liberado. Tus otros dispositivos siguen funcionando.' };
+  }
   const hoja = obtenerHoja(DOCENTES.nombre, DOCENTES.encabezados);
   const fila = buscarFila(hoja, DOC.CORREO, u.correo);
   hoja.getRange(fila.numero, DOC.DISPOSITIVO + 1, 1, 2).setValues([['', '']]);
@@ -98,18 +112,191 @@ function liberarMiTelefono(u) {
 /** Comprueba que el correo esté registrado con este teléfono y que su acceso esté activo. */
 function autenticar(d) {
   const correo = String(d.correo || '').toLowerCase();
+  if (esSuperAdminFijo(correo)) return autenticarSuperAdmin(correo, d);
   const hoja = obtenerHoja(DOCENTES.nombre, DOCENTES.encabezados);
   const fila = buscarFila(hoja, DOC.CORREO, correo);
   if (fila) validarEstado(fila.valores);
   if (!fila || fila.valores[DOC.DISPOSITIVO] !== d.dispositivo) {
     throw errorCon('NO_REGISTRADO',
-      'Este teléfono no está registrado con tu correo. Pide al administrador que revise la hoja "Docentes".');
+      'Este teléfono no está registrado con tu correo. Pide al administrador que revise la hoja "Personal".');
   }
   const metodo = d.marca && d.marca.metodo;
   if (metodo && fila.valores[DOC.METODO] !== metodo) {
     hoja.getRange(fila.numero, DOC.METODO + 1).setValue(metodo);
   }
   return miembroDe(fila.valores);
+}
+
+// ---------------------------------------------------------------- Super administrador (interno)
+//
+// El super administrador NO está en la hoja "Personal" ni su rol en "Roles": así nadie puede verlo, cambiarlo ni
+// dárselo a otra persona desde la hoja. Solo lo es el correo de CONFIG.SUPER_ADMINISTRADOR, y el teléfono con el
+// que se registró se guarda en las propiedades del script (Configuración del proyecto → Propiedades), no en la hoja.
+
+const CLAVE_SUPERADMIN = 'SUPERADMIN_';
+
+function leerSuperAdmin(correo) {
+  const v = PropertiesService.getScriptProperties().getProperty(CLAVE_SUPERADMIN + correo);
+  return v ? JSON.parse(v) : null;
+}
+
+/** Guarda (o borra, con datos = null) el registro interno de un super administrador. */
+function guardarSuperAdmin(correo, datos) {
+  const props = PropertiesService.getScriptProperties();
+  if (datos) props.setProperty(CLAVE_SUPERADMIN + correo, JSON.stringify(datos));
+  else props.deleteProperty(CLAVE_SUPERADMIN + correo);
+}
+
+/**
+ * Dispositivos donde el super administrador ya entró: [{ id, modelo, desde }]. Una versión anterior guardaba uno solo
+ * (datos.dispositivo); se convierte a la lista.
+ */
+function dispositivosSuperAdmin(datos) {
+  if (!datos) return [];
+  if (Array.isArray(datos.dispositivos)) return datos.dispositivos;
+  return datos.dispositivo ? [{ id: datos.dispositivo, modelo: datos.modelo || '', desde: datos.registrado || '' }] : [];
+}
+
+function superAdminPorDispositivo(dispositivo) {
+  if (!CONFIG.SUPER_ADMINISTRADOR) return null;
+  const correo = CONFIG.SUPER_ADMINISTRADOR.toLowerCase();
+  const s = leerSuperAdmin(correo);
+  return s && dispositivosSuperAdmin(s).some(x => x.id === dispositivo) ? Object.assign({ correo: correo }, s) : null;
+}
+
+function miembroSuperAdmin(correo, datos) {
+  return {
+    correo: correo, nombre: datos.nombre || 'Super administrador', hoja: '', rol: 'SUPERADMIN',
+    rolNombre: rolJson('SUPERADMIN').nombre, jornada: jornadaPorDefecto(), estado: 'ACTIVO',
+    modelo: datos.modelo || '', conTelefono: dispositivosSuperAdmin(datos).length > 0, registrado: datos.registrado || '',
+  };
+}
+
+/**
+ * Versiones anteriores lo guardaban en "Personal": se pasa su teléfono al registro interno y se borran su fila
+ * y su hoja personal (si está vacía). Devuelve el registro interno o null.
+ */
+function migrarSuperAdmin(correo) {
+  const hoja = obtenerHoja(DOCENTES.nombre, DOCENTES.encabezados);
+  const fila = buscarFila(hoja, DOC.CORREO, correo);
+  if (!fila) return null;
+  const v = fila.valores;
+  const datos = { dispositivo: String(v[DOC.DISPOSITIVO] || ''), modelo: String(v[DOC.MODELO] || ''),
+    nombre: String(v[DOC.NOMBRE] || ''), registrado: v[DOC.REGISTRADO] ? textoFecha(v[DOC.REGISTRADO]) : fechaDesplazada(0) };
+  const libro = libroAsistencia();
+  const personal = v[DOC.HOJA] && libro.getSheetByName(String(v[DOC.HOJA]));
+  if (personal && personal.getLastRow() <= 1 && libro.getSheets().length > 1) libro.deleteSheet(personal);
+  hoja.deleteRow(fila.numero);
+  if (!datos.dispositivo) return null;
+  datos.dispositivos = dispositivosSuperAdmin(datos);
+  delete datos.dispositivo;
+  guardarSuperAdmin(correo, datos);
+  return datos;
+}
+
+function registrarSuperAdmin(correo, d) {
+  iniciarSesionSuperAdmin(correo, d);
+  return { ok: true, mensaje: 'Listo.' };
+}
+
+/**
+ * El super administrador no se registra: entra directo con su correo y puede usar varios dispositivos (teléfonos,
+ * computadora, iPhone). Para que nadie más entre solo con saber el correo, cada dispositivo NUEVO pide la clave
+ * secreta guardada en las propiedades del script (CLAVE_SUPERADMIN). Los dispositivos donde ya entró no la vuelven
+ * a pedir. Sin clave configurada, solo puede entrar en el primer dispositivo.
+ */
+function iniciarSesionSuperAdmin(correo, d) {
+  limpiarRastrosSuperAdmin();
+  const actual = leerSuperAdmin(correo) || {};
+  const lista = dispositivosSuperAdmin(actual);
+  if (!lista.some(x => x.id === d.dispositivo)) {
+    if (lista.length > 0 || claveSuperAdmin()) comprobarClaveSuperAdmin(d.clave);
+    lista.push({ id: d.dispositivo, modelo: d.modelo || '', desde: fechaDesplazada(0) });
+    actual.dispositivos = lista.slice(-10); // como máximo los últimos 10 dispositivos
+    delete actual.dispositivo;
+    actual.modelo = d.modelo || actual.modelo || '';
+    actual.nombre = 'Super administrador';
+    actual.registrado = actual.registrado || fechaDesplazada(0);
+    guardarSuperAdmin(correo, actual);
+  }
+  const m = miembroSuperAdmin(correo, actual);
+  return { ok: true, encontrado: true, correo: correo, nombre: m.nombre, rol: m.rol, rolNombre: m.rolNombre };
+}
+
+function claveSuperAdmin() {
+  return String(PropertiesService.getScriptProperties().getProperty('CLAVE_SUPERADMIN') || '').trim();
+}
+
+/** Comprueba la clave del super administrador. Tras 5 intentos fallidos se bloquea 15 minutos. */
+function comprobarClaveSuperAdmin(clave) {
+  const guardada = claveSuperAdmin();
+  if (!guardada) {
+    throw new Error('Esta cuenta ya se usa en otro dispositivo. Para entrar también en este, el dueño del sistema debe ' +
+      'configurar la clave del super administrador (propiedad CLAVE_SUPERADMIN en Apps Script).');
+  }
+  const cache = CacheService.getScriptCache();
+  const fallos = Number(cache.get('fallosSuperAdmin') || 0);
+  if (fallos >= 5) throw new Error('Demasiados intentos con una clave incorrecta. Espera 15 minutos.');
+  if (!clave) throw errorCon('CLAVE_SUPERADMIN', 'Es la primera vez que entras en este dispositivo: escribe tu clave de super administrador.');
+  if (String(clave) !== guardada) {
+    cache.put('fallosSuperAdmin', String(fallos + 1), 900);
+    throw errorCon('CLAVE_SUPERADMIN', 'Clave incorrecta.');
+  }
+  cache.remove('fallosSuperAdmin');
+}
+
+function autenticarSuperAdmin(correo, d) {
+  const actual = leerSuperAdmin(correo) || migrarSuperAdmin(correo);
+  if (!actual || !dispositivosSuperAdmin(actual).some(x => x.id === d.dispositivo)) {
+    throw errorCon('NO_REGISTRADO', 'Este dispositivo no está registrado con tu correo.');
+  }
+  return Object.assign(miembroSuperAdmin(correo, actual), { _dispositivo: d.dispositivo });
+}
+
+/**
+ * Ejecutar desde el editor si el super administrador perdió o cambió su teléfono: libera su registro para que
+ * pueda volver a registrarse desde el teléfono nuevo.
+ */
+function liberarSuperAdmin() {
+  const correo = CONFIG.SUPER_ADMINISTRADOR.toLowerCase();
+  const datos = leerSuperAdmin(correo) || {};
+  datos.dispositivos = [];
+  delete datos.dispositivo;
+  guardarSuperAdmin(correo, datos);
+  Logger.log('Listo: se quitaron todos los dispositivos del super administrador. Al volver a entrar, cada uno pedirá ' +
+    'la clave (CLAVE_SUPERADMIN).');
+}
+
+/**
+ * Borra todo rastro del super administrador en la hoja: su fila en "Personal", su hoja personal, el rol en "Roles"
+ * y cualquier fila con su correo en Rechazados, Solicitudes y Actividades especiales. Se ejecuta sola cada hora
+ * y al iniciar sesión; también se puede ejecutar desde el editor.
+ */
+function limpiarRastrosSuperAdmin() {
+  if (!CONFIG.SUPER_ADMINISTRADOR) return;
+  const correo = CONFIG.SUPER_ADMINISTRADOR.toLowerCase();
+  if (!leerSuperAdmin(correo)) migrarSuperAdmin(correo);
+  const libro = libroAsistencia();
+  // Fila en "Personal" (y su hoja personal).
+  const personal = obtenerHoja(DOCENTES.nombre, DOCENTES.encabezados);
+  let fila;
+  while ((fila = buscarFila(personal, DOC.CORREO, correo))) {
+    const hojaPersonal = fila.valores[DOC.HOJA] && libro.getSheetByName(String(fila.valores[DOC.HOJA]));
+    if (hojaPersonal && libro.getSheets().length > 1) libro.deleteSheet(hojaPersonal);
+    personal.deleteRow(fila.numero);
+  }
+  // Rol en "Roles" (leerRoles borra esa fila).
+  _roles = null;
+  leerRoles();
+  // Filas con su correo en otras pestañas.
+  [[RECHAZADOS, 2], [SOLICITUDES, SOL.CORREO], [ACTIVIDADES, ACT.CORREO]].forEach(([def, col]) => {
+    const hoja = libro.getSheetByName(def.nombre);
+    if (!hoja || hoja.getLastRow() < 2) return;
+    const valores = hoja.getRange(2, col + 1, hoja.getLastRow() - 1, 1).getValues();
+    for (let i = valores.length - 1; i >= 0; i--) {
+      if (String(valores[i][0]).trim().toLowerCase() === correo) hoja.deleteRow(i + 2);
+    }
+  });
 }
 
 /** Un miembro inactivo o eliminado no puede usar la app. */
@@ -128,17 +315,31 @@ function autenticarGestor(d, accion) {
   return usuario;
 }
 function esAdministradorFijo(correo) {
-  return CONFIG.ADMINISTRADORES.map(c => c.toLowerCase()).indexOf(String(correo).toLowerCase()) >= 0;
+  return (CONFIG.ADMINISTRADORES || []).map(c => c.toLowerCase()).indexOf(String(correo).toLowerCase()) >= 0;
 }
+
+/** El correo de CONFIG.SUPER_ADMINISTRADOR (uno solo) es el super administrador. */
+function esSuperAdminFijo(correo) {
+  return !!CONFIG.SUPER_ADMINISTRADOR && String(correo).toLowerCase() === CONFIG.SUPER_ADMINISTRADOR.toLowerCase();
+}
+
+/** Correos con rol fijo (definido en CONFIG): no se les puede cambiar el rol, desactivar ni eliminar. */
+const esRolFijo = correo => esSuperAdminFijo(correo) || esAdministradorFijo(correo);
+
+// Los registros del super administrador solo los ve otro super administrador. Se activa en administrar().
+let _verSuperAdmin = false;
 
 function estadoDe(v) {
   return claveDe(ESTADOS, v[DOC.ESTADO], x => x) || 'ACTIVO';
 }
 
-/** Convierte una fila de "Docentes" en un miembro con su rol, jornada y estado (acepta clave o nombre en la hoja). */
+/** Convierte una fila de "Personal" en un miembro con su rol, jornada y estado (acepta clave o nombre en la hoja). */
 function miembroDe(v) {
   const correo = String(v[DOC.CORREO]).toLowerCase();
-  const rol = esAdministradorFijo(correo) ? 'ADMINISTRADOR' : (claveDe(leerRoles(), v[DOC.ROL], r => r.nombre) || 'DOCENTE');
+  let rol = esSuperAdminFijo(correo) ? 'SUPERADMIN' : esAdministradorFijo(correo) ? 'ADMINISTRADOR'
+    : (claveDe(leerRoles(), v[DOC.ROL], r => r.nombre) || 'DOCENTE');
+  // El rol de super administrador no se puede dar escribiéndolo en la hoja: solo los correos de CONFIG lo tienen.
+  if (esSuperAdmin(rol) && !esSuperAdminFijo(correo)) rol = 'DOCENTE';
   const jornada = claveDe(leerJornadas(), v[DOC.JORNADA], j => j.nombre) || jornadaPorDefecto();
   return {
     correo: correo,
@@ -161,15 +362,30 @@ function claveDe(mapa, valor, nombre) {
     String(nombre(mapa[k])).toLowerCase() === buscado)[0] || null;
 }
 
-/** Miembros que no fueron eliminados. */
+/** Miembros que no fueron eliminados. Los super administradores solo aparecen para otro super administrador. */
 function leerMiembros() {
   const valores = obtenerHoja(DOCENTES.nombre, DOCENTES.encabezados).getDataRange().getValues();
-  return valores.slice(1).filter(v => v[DOC.CORREO]).map(miembroDe).filter(m => m.estado !== 'ELIMINADO');
+  return valores.slice(1).filter(v => v[DOC.CORREO]).map(miembroDe)
+    .filter(m => m.estado !== 'ELIMINADO' && (_verSuperAdmin || !esSuperAdmin(m.rol)));
 }
 
 // ---------------------------------------------------------------- Perfil (lo que la app descarga)
 
-function perfil(u) {
+/** Quien no marca asistencia no necesita hoja personal: si tiene una vacía (solo encabezados), se borra. */
+function quitarHojaSinUso(u) {
+  if (marcaAsistencia(u.rol) || !u.hoja) return;
+  const libro = libroAsistencia();
+  const hoja = libro.getSheetByName(u.hoja);
+  if (hoja && hoja.getLastRow() <= 1 && libro.getSheets().length > 1) libro.deleteSheet(hoja);
+}
+
+/**
+ * Lo que la app descarga al abrirse. Para que cargue rápido, en la misma respuesta puede venir el historial
+ * (d.historial) y el ranking del mes (d.ranking, d.mes): así es una sola llamada en vez de tres.
+ */
+function perfil(u, d) {
+  quitarHojaSinUso(u);
+  d = d || {};
   const desde = fechaDesplazada(-60);
   const jornadas = leerJornadas();
   const config = leerConfig();
@@ -184,7 +400,23 @@ function perfil(u) {
     eventos: leerEventos().filter(e => aplicaA(e, u.correo) && e.hasta >= desde),
     rolInfo: rolJson(u.rol),
     destacados: destacadosSemana(),
+    dias: d.historial && marcaAsistencia(u.rol) ? misMarcas(u).dias : undefined,
+    ranking: d.ranking ? rankingDelMes(u, d.mes) : undefined,
   };
+}
+
+/**
+ * La jornada con la que la persona marcó ese día (columna "Jornada" de la fila). Así, si después se le cambia
+ * la jornada, los días anteriores se siguen evaluando con la que tenía; el cambio cuenta desde ese momento.
+ * Para corregir un día, se cambia la jornada en esa fila de su hoja.
+ */
+function conJornadaDeFila(m, v) {
+  const texto = String(v[COL.JORNADA - 1] || '').trim().toLowerCase();
+  if (!texto) return m;
+  const jornadas = leerJornadas();
+  const codigo = Object.keys(jornadas).filter(k => k.toLowerCase() === texto ||
+    String(jornadas[k].nombre).trim().toLowerCase() === texto)[0];
+  return codigo && codigo !== m.jornada ? Object.assign({}, m, { jornada: codigo }) : m;
 }
 
 // ---------------------------------------------------------------- Marcas
@@ -210,8 +442,9 @@ function misMarcas(u) {
         minutos = aMinutos(salida) - aMinutos(entrada);
         if (minutos < 0) minutos += 1440; // turno que pasa la medianoche
       }
-      const meta = metaDelDia(u, fecha, eventos);
-      const limite = limiteEntrada(u, fecha, eventos);
+      const mf = conJornadaDeFila(u, v);
+      const meta = metaDelDia(mf, fecha, eventos);
+      const limite = limiteEntrada(mf, fecha, eventos);
       return {
         fecha: fecha,
         entrada: entrada,
@@ -297,8 +530,11 @@ function registrar(usuario, d) {
     }
     if (sede && !fuera) motivoRevision = verificarPresencia(sede, d, tomada, ahora, minutosDeRetraso);
   } catch (err) {
-    obtenerHoja(RECHAZADOS.nombre, RECHAZADOS.encabezados)
-      .appendRow([fecha, hora, usuario.correo, ETIQUETAS[d.tipo] || d.tipo, err.message, mapa, distancia]);
+    // El super administrador no deja rastro en la hoja.
+    if (!esSuperAdmin(usuario.rol)) {
+      obtenerHoja(RECHAZADOS.nombre, RECHAZADOS.encabezados)
+        .appendRow([fecha, hora, usuario.correo, ETIQUETAS[d.tipo] || d.tipo, err.message, mapa, distancia]);
+    }
     throw err;
   }
 
@@ -317,10 +553,14 @@ function registrar(usuario, d) {
     }
     permisos.forEach(p => notas.push('Permiso de ' + p.horaInicio + ' a ' + p.horaFin +
       (p.detalle ? ' (' + p.detalle + ')' : '')));
+    const minutosTarde = actividad ? 0 : Math.max(0, aMinutos(hora) - limite);
     hoja.appendRow([fecha, "'" + hora, usuario.correo, '', notas.join(' | '), mapa, '', jornada.nombre, '', '',
-      actividad ? 'Sí' : '', (actividad || motivoRevision) ? POR_REVISAR : '']);
+      actividad ? 'Sí' : '', (actividad || motivoRevision) ? POR_REVISAR : '',
+      actividad ? 'Actividad especial' : 'Sin salida', actividad ? '—' : (minutosTarde > 0 ? 'Tarde' : 'Puntual'),
+      actividad ? '' : minutosTarde, '', '']);
   } else {
-    let minutos = aMinutos(hora) - aMinutos(textoHora(hoja.getRange(filaHoy, COL.ENTRADA).getValue()));
+    const horaEntradaFila = textoHora(hoja.getRange(filaHoy, COL.ENTRADA).getValue());
+    let minutos = aMinutos(hora) - aMinutos(horaEntradaFila);
     if (minutos < 0) minutos += 1440; // salida después de la medianoche
     const minutosPermiso = permisos.reduce((total, p) => total + Math.max(0, aMinutos(p.horaFin) - aMinutos(p.horaInicio)), 0);
     const meta = metaDelDia(usuario, fechaFila, eventos);
@@ -341,6 +581,11 @@ function registrar(usuario, d) {
       hoja.getRange(filaHoy, COL.REVISION).setValue(POR_REVISAR);
     }
     if (notas.length) hoja.getRange(filaHoy, COL.OBSERVACION).setValue([anterior].concat(notas).filter(String).join(' | '));
+    // Columnas como en el sistema anterior: estado del día, salida anticipada y horas extra.
+    const minutosAntes = esActividad ? 0 : minutosAntesDeSalida(usuario, fechaFila, eventos, horaEntradaFila.substring(0, 5), hora.substring(0, 5));
+    hoja.getRange(filaHoy, COL.ESTADO).setValue(esActividad ? 'Actividad especial' : 'Asistió');
+    hoja.getRange(filaHoy, COL.MIN_ANTES, 1, 2).setValues([[esActividad ? '' : minutosAntes,
+      "'" + textoDuracion(Math.max(0, minutos - meta))]]);
     actividadDelDia = esActividad;
   }
   if (actividad || actividadDelDia) anotarActividad(usuario, fechaFila, d.tipo, hora, actividad ? observacion : '', mapa);
@@ -501,6 +746,8 @@ function solicitudDe(v) {
     motivo: String(v[SOL.MOTIVO] || ''),
     estado: claveDe(ESTADOS_SOLICITUD, v[SOL.ESTADO], x => x) || 'PENDIENTE',
     respuesta: String(v[SOL.RESPUESTA] || ''),
+    revisadaPor: String(v[SOL.REVISOR] || ''),
+    revisadaEl: v[SOL.REVISADA] ? textoFecha(v[SOL.REVISADA]) : '',
   };
 }
 
@@ -510,7 +757,8 @@ function leerSolicitudes() {
 }
 
 function misSolicitudes(u) {
-  return { ok: true, solicitudes: leerSolicitudes().filter(s => s.correo === u.correo).slice(0, 50) };
+  return { ok: true, solicitudes: leerSolicitudes().filter(s => s.correo === u.correo).slice(0, 50)
+    .map(s => Object.assign(s, { rol: u.rolNombre })) };
 }
 
 function crearSolicitud(u, s) {
@@ -587,4 +835,87 @@ function destacadosSemana() {
   const resultado = { semana: lunes, mejorRacha: mejorRacha, masHoras: masHoras };
   cache.put('destacados', JSON.stringify(resultado), 1800);
   return resultado;
+}
+
+// ---------------------------------------------------------------- Correcciones a mano en la hoja
+
+/**
+ * Activador simple de Google: corre solo cuando alguien EDITA la hoja a mano, para que todo quede enlazado.
+ * - En la hoja de una persona: si se corrige la fecha, la entrada, la salida o la jornada, se recalculan las
+ *   columnas de esa fila (Horas, Cumplió meta, Estado, Ent status, Min tarde, Min antes y Horas extra).
+ * - En Personal, Jornadas, Calendario, Configuración o Roles: se vuelven a calcular los reportes.
+ * En los dos casos se actualizan al momento "Resumen Global", "Estado Global" y "Excepciones", y la app lo ve
+ * la próxima vez que se actualice.
+ */
+function onEdit(e) {
+  try {
+    if (!e || !e.range) return;
+    const rango = e.range;
+    const hoja = rango.getSheet();
+    const nombre = hoja.getName();
+    if (rango.getRow() + rango.getNumRows() - 1 < 2) return; // solo encabezados
+    // Pestañas que escribe el sistema: no se recalcula nada si alguien las toca.
+    if ([RESUMEN_GLOBAL.nombre, ESTADO_GLOBAL.nombre, EXCEPCIONES.nombre, BITACORA.nombre, RECHAZADOS.nombre]
+      .indexOf(nombre) >= 0) return;
+    _libro = e.source; // en un activador simple se trabaja con la hoja que se editó
+    let cambio = [DOCENTES.nombre, JORNADAS.nombre, CALENDARIO.nombre, CONFIGURACION.nombre, ROLES_HOJA.nombre]
+      .indexOf(nombre) >= 0;
+    if (!cambio) {
+      const primera = rango.getColumn();
+      const ultima = primera + rango.getNumColumns() - 1;
+      const tocaHoras = [COL.FECHA, COL.ENTRADA, COL.SALIDA, COL.JORNADA].some(c => c >= primera && c <= ultima);
+      const miembro = tocaHoras ? leerMiembros().filter(m => m.hoja === nombre)[0] : null;
+      if (!miembro) return; // no es la hoja de una persona, o se editó otra columna
+      const eventos = leerEventos();
+      for (let f = Math.max(2, rango.getRow()); f < rango.getRow() + rango.getNumRows(); f++) recalcularFila(hoja, f, miembro, eventos);
+      cambio = true;
+    }
+    if (cambio) {
+      limpiarCacheReportes();
+      refrescarPestanas();
+    }
+  } catch (err) {
+    console.log('No se pudo aplicar el cambio hecho en la hoja: ' + err.message);
+  }
+}
+
+/** Recalcula las columnas de una fila de la hoja de una persona a partir de su fecha, entrada y salida. */
+function recalcularFila(hoja, f, m, eventos) {
+  const v = hoja.getRange(f, 1, 1, ENCABEZADOS_DOCENTE.length).getValues()[0];
+  const fecha = textoFecha(v[COL.FECHA - 1]);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) return;
+  m = conJornadaDeFila(m, v);
+  const hora = x => x === '' || x === null ? '' : textoHora(x).substring(0, 8);
+  const entrada = hora(v[COL.ENTRADA - 1]);
+  const salida = hora(v[COL.SALIDA - 1]);
+  // Las horas quedan como texto (Sheets convierte lo que se escribe a mano en hora).
+  if (v[COL.ENTRADA - 1] instanceof Date) hoja.getRange(f, COL.ENTRADA).setValue("'" + entrada);
+  if (v[COL.SALIDA - 1] instanceof Date) hoja.getRange(f, COL.SALIDA).setValue("'" + salida);
+  if (v[COL.FECHA - 1] instanceof Date) hoja.getRange(f, COL.FECHA).setValue("'" + fecha);
+
+  const actividad = v[COL.ACTIVIDAD - 1] === 'Sí';
+  const minutosTarde = entrada && !actividad ? Math.max(0, aMinutos(entrada) - limiteEntrada(m, fecha, eventos)) : '';
+  let horas = '', cumplio = '', minutosAntes = '', extra = '', estado = entrada ? (actividad ? 'Actividad especial' : 'Sin salida') : '';
+  if (entrada && salida) {
+    let minutos = aMinutos(salida) - aMinutos(entrada);
+    if (minutos < 0) minutos += 1440; // turno que pasa la medianoche
+    const meta = metaDelDia(m, fecha, eventos);
+    const permiso = permisosPorHoras(m, fecha, eventos).reduce((s, p) => s + Math.max(0, aMinutos(p.horaFin) - aMinutos(p.horaInicio)), 0);
+    horas = "'" + textoDuracion(minutos);
+    cumplio = minutos + permiso >= meta ? 'Sí' : 'No';
+    minutosAntes = actividad ? '' : minutosAntesDeSalida(m, fecha, eventos, entrada.substring(0, 5), salida.substring(0, 5));
+    extra = "'" + textoDuracion(Math.max(0, minutos - meta));
+    if (!actividad) estado = 'Asistió';
+  }
+  const estadoEntrada = !entrada || actividad ? '—' : (minutosTarde > 0 ? 'Tarde' : 'Puntual');
+  hoja.getRange(f, COL.HORAS, 1, 2).setValues([[horas, cumplio]]);
+  hoja.getRange(f, COL.ESTADO, 1, 5).setValues([[estado, estadoEntrada, minutosTarde, minutosAntes, extra]]);
+
+  // Observación: se quitan las notas automáticas que ya no aplican y se anota la corrección.
+  const notas = String(v[COL.OBSERVACION - 1] || '').split(' | ').filter(String)
+    .filter(n => !(/^Retraso:/.test(n) && !(minutosTarde > 0)))
+    .filter(n => !(/^Salida con /.test(n) && cumplio === 'Sí'))
+    .filter(n => n !== 'Corregido por la administración');
+  notas.push('Corregido por la administración');
+  hoja.getRange(f, COL.OBSERVACION).setValue(notas.join(' | '));
 }

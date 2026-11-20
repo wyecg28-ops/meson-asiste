@@ -13,15 +13,23 @@ como una app. Usa **el mismo servidor y la misma hoja de cálculo** que la app d
 - **Actividad especial** y observaciones.
 - **Face ID, huella o código del teléfono** (opcional, en Perfil) al abrir y al marcar.
 - Marcas **sin internet**: se guardan y se envían solas después.
+- **Ranking de horas** del mes en Inicio, para todos.
 - **Resumen** de la semana o el mes (puntualidad, horas, horas extra, racha), **historial** y **destacados de la semana**.
+- Se **actualiza sola** cada pocos minutos con los cambios de la hoja de Google.
 - **Permisos**: pedir permisos o vacaciones y ver su estado.
 - Pantalla **Acerca de** con el crédito del creador.
 
+## Panel de administración
+
+Quien tiene funciones de administración ve la pestaña **Admin**, igual que en Android: Hoy (con el QR de la entrada),
+Solicitudes, Miembros, Jornadas (con horario por día y turno nocturno), Roles, Calendario, Por revisar, Reportes (por mes
+o año, por persona, con descarga en **PDF** y **Excel**) y Ajustes (meta, tolerancia y ubicación del colegio con barra de
+0 a 100 m). En iPhone, al descargar un reporte se abre **Compartir** para guardarlo en Archivos o enviarlo.
+
 ## Qué no incluye
 
-- La **administración** (miembros, roles, jornadas, calendario, reportes, ajustes): se hace desde la app de Android.
-- La **verificación por Wi-Fi**: los navegadores no pueden leer las redes Wi-Fi. Si el colegio usa Wi-Fi, las marcas
-  desde el iPhone quedan *Por revisar*; para el iPhone conviene usar *Solo ubicación* o *Código QR*.
+- La **verificación por Wi-Fi**: los navegadores no pueden leer las redes Wi-Fi. Las redes se registran desde Android y,
+  si el colegio usa Wi-Fi, las marcas desde el iPhone quedan *Por revisar*. Para el iPhone conviene *Solo ubicación* o *QR*.
 - Los **recordatorios programados** (15 min antes de la entrada, etc.): por ahora solo existen en Android.
 
 ## Dónde está publicada

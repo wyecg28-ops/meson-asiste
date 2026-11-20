@@ -15,9 +15,11 @@ import com.example.asistencia.auth.MetodoBiometrico
 import com.example.asistencia.datos.CuentaGuardada
 import com.example.asistencia.datos.EstadoMarca
 import com.example.asistencia.datos.Marca
+import com.example.asistencia.datos.HistorialHoja
 import com.example.asistencia.datos.Marcas
 import com.example.asistencia.datos.Perfil
 import com.example.asistencia.datos.Periodo
+import com.example.asistencia.datos.Ranking
 import com.example.asistencia.datos.ServidorException
 import com.example.asistencia.datos.SheetsApi
 import com.example.asistencia.datos.Sesion
@@ -84,9 +86,17 @@ data class EstadoUi(
     val marcas: List<Marca> = emptyList(),
     /** Aumenta con cada marca guardada; la pantalla lo usa para limpiar la observación. */
     val marcasGuardadas: Int = 0,
+    /** Ranking de horas del mes elegido (pantalla de inicio). */
+    val ranking: Ranking? = null,
+    val cargandoRanking: Boolean = false,
+    /** El super administrador entra en un dispositivo nuevo: correo y mensaje para pedir su clave. */
+    val pedirClave: Pair<String, String>? = null,
 ) {
     val registrado get() = correo != null
-    val listo get() = registrado && permisosListos && metodo != null
+    val listo get() = registrado && permisosListos
+
+    /** Pide huella o rostro para entrar: si la persona lo activó y el teléfono tiene cómo confirmar. */
+    val entraConHuella get() = pedirHuella && metodo != null
     val pendientes get() = marcas.count { it.estado == EstadoMarca.PENDIENTE }
 }
 
@@ -95,6 +105,9 @@ class AsistenciaViewModel(app: Application) : AndroidViewModel(app) {
     private val sesion = Sesion(app)
     /** Historial de la cuenta abierta (cada cuenta tiene el suyo). */
     private val marcas get() = Marcas(getApplication(), sesion.correo)
+
+    /** Lo que se muestra: la hoja de Google (con las correcciones de la administración) + lo pendiente del teléfono. */
+    private fun visibles() = HistorialHoja.combinar(marcas.todas(), sesion.historialHoja, sesion.historialHojaHora, sesion.perfil)
     private val sincronizando = Mutex()
 
     private val _estado = MutableStateFlow(estadoGuardado())
@@ -102,10 +115,16 @@ class AsistenciaViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         Recordatorios.programarTodos(app)
+        if (sesion.correo != null && sesion.metodo == null) {
+            elegirMetodoAutomatico()
+            _estado.update { it.copy(metodo = sesion.metodo) }
+        }
         viewModelScope.launch {
             // Teléfono sin ninguna cuenta guardada (app nueva o reinstalada): se busca su registro en el servidor.
             if (sesion.correo == null && sesion.cuentas.isEmpty()) recuperarRegistro()
             sincronizar()
+            // El ranking llega con el perfil; si no vino (servidor anterior o falló), se pide aparte.
+            if (_estado.value.ranking == null) cargarRanking()
         }
     }
 
@@ -151,8 +170,8 @@ class AsistenciaViewModel(app: Application) : AndroidViewModel(app) {
         pedirHuella = sesion.pedirHuella,
         cuentas = sesion.cuentas,
         accesoCerrado = sesion.accesoCerrado,
-        marcas = marcas.todas(),
-    ).let { it.copy(bloqueado = it.listo && it.pedirHuella) }
+        marcas = visibles(),
+    ).let { it.copy(bloqueado = it.listo && it.entraConHuella) }
 
     // ---------- Bloqueo con huella al abrir ----------
 
@@ -174,7 +193,7 @@ class AsistenciaViewModel(app: Application) : AndroidViewModel(app) {
     fun alVolverALaApp() {
         val e = _estado.value
         val fuera = android.os.SystemClock.elapsedRealtime() - enSegundoPlanoDesde
-        if (enSegundoPlanoDesde > 0 && fuera > 60_000 && e.listo && e.pedirHuella && !e.ocupado) {
+        if (enSegundoPlanoDesde > 0 && fuera > 60_000 && e.listo && e.entraConHuella && !e.ocupado) {
             _estado.update { it.copy(bloqueado = true, resultado = null) }
         }
     }
@@ -183,7 +202,10 @@ class AsistenciaViewModel(app: Application) : AndroidViewModel(app) {
         sesion.pedirHuella = activo
         _estado.update { it.copy(pedirHuella = activo) }
         mostrarMensaje(
-            Mensaje(if (activo) "La app pedirá tu huella al abrirse." else "La app ya no pedirá la huella al abrirse.", error = false)
+            Mensaje(
+                if (activo) "Iniciar sesión con huella: activado." else "Iniciar sesión con huella: desactivado. Al marcar se sigue pidiendo.",
+                error = false,
+            )
         )
     }
 
@@ -233,8 +255,9 @@ class AsistenciaViewModel(app: Application) : AndroidViewModel(app) {
             throw IllegalStateException("Describe la actividad especial (por ejemplo: excursión al museo con 3.º básico).")
         }
         validarSecuencia(tipo)
-        val metodo = checkNotNull(sesion.metodo)
-        Biometria.autenticar(activity, metodo, "Registrar ${tipo.etiqueta.lowercase()}")
+        // Se pide huella, rostro o PIN si el teléfono los tiene (aunque no se pidan para entrar); si no, solo ubicación.
+        val metodo = sesion.metodo?.takeIf { Biometria.disponible(getApplication(), it) }
+        if (metodo != null) Biometria.autenticar(activity, metodo, "Registrar ${tipo.etiqueta.lowercase()}")
 
         val lectura = Ubicacion.obtener(getApplication())
         if (lectura.simulada) {
@@ -263,7 +286,7 @@ class AsistenciaViewModel(app: Application) : AndroidViewModel(app) {
             id = UUID.randomUUID().toString(),
             tipo = tipo.name,
             fechaHora = System.currentTimeMillis(),
-            metodo = metodo.etiqueta,
+            metodo = metodo?.etiqueta ?: "Sin biometría (el teléfono no tiene)",
             latitud = lectura.latitud,
             longitud = lectura.longitud,
             precision = lectura.precisionMetros.toDouble(),
@@ -273,10 +296,11 @@ class AsistenciaViewModel(app: Application) : AndroidViewModel(app) {
             wifi = wifi,
         )
         marcas.agregar(marca)
-        _estado.update { it.copy(marcas = marcas.todas(), marcasGuardadas = it.marcasGuardadas + 1) }
+        _estado.update { it.copy(marcas = visibles(), marcasGuardadas = it.marcasGuardadas + 1) }
 
-        sincronizar()
+        enviarPendientes()
         val final = marcas.todas().first { it.id == marca.id }
+        viewModelScope.launch { runCatching { sincronizar() } }
         if (final.estado == EstadoMarca.RECHAZADA) {
             mostrarError("${tipo.etiqueta} rechazada: ${final.detalle}")
         } else {
@@ -285,6 +309,42 @@ class AsistenciaViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun cerrarResultado() = _estado.update { it.copy(resultado = null) }
+
+    /** Ranking de horas de un mes ("2026-11"; null = el mes actual). No muestra errores: es solo informativo. */
+    fun cargarRanking(mes: String? = null) = viewModelScope.launch {
+        if (sesion.correo == null || _estado.value.cargandoRanking) return@launch
+        _estado.update { it.copy(cargandoRanking = true) }
+        try {
+            val datos = datosDelTelefono(getApplication())
+            if (mes != null) datos.put("mes", mes)
+            val r = Ranking.deJson(SheetsApi.enviar("ranking", datos))
+            _estado.update { it.copy(ranking = r) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Sin conexión o servidor sin actualizar: se queda el ranking que ya había.
+        } finally {
+            _estado.update { it.copy(cargandoRanking = false) }
+        }
+    }
+
+    /**
+     * Actualización silenciosa (al volver a la app y cada pocos minutos): envía pendientes, descarga el perfil
+     * y el ranking. Así se ven los cambios hechos en la hoja de Google sin tocar "Actualizar".
+     */
+    fun refrescar() = viewModelScope.launch {
+        val e = _estado.value
+        if (e.correo == null || e.bloqueado || e.ocupado) return@launch
+        try {
+            sincronizar()
+        } catch (ex: CancellationException) {
+            throw ex
+        } catch (ex: Exception) {
+            // Silencioso.
+        }
+        // El ranking llega con el perfil; solo se pide aparte si el servidor publicado es anterior.
+        if (_estado.value.ranking == null) cargarRanking()
+    }
 
     /** Envía pendientes y vuelve a descargar rol, jornada y calendario. */
     fun reintentarEnvio() = ejecutar {
@@ -305,9 +365,19 @@ class AsistenciaViewModel(app: Application) : AndroidViewModel(app) {
         )
     }
 
-    fun cambiarMetodo() {
-        sesion.metodo = null
-        _estado.update { it.copy(metodo = null, mensaje = null) }
+    /** Cambia entre huella y rostro, si el teléfono tiene los dos; se confirma con el nuevo. */
+    fun cambiarMetodo(activity: FragmentActivity) = ejecutar {
+        val disponibles = MetodoBiometrico.entries.filter { Biometria.disponible(getApplication(), it) }
+        if (disponibles.size < 2) {
+            throw IllegalStateException(
+                if (disponibles.isEmpty()) "Este teléfono no tiene huella, rostro ni PIN configurado."
+                else "Este teléfono solo permite ${disponibles.first().etiqueta.lowercase()}."
+            )
+        }
+        val siguiente = disponibles[(disponibles.indexOf(sesion.metodo) + 1) % disponibles.size]
+        Biometria.autenticar(activity, siguiente, "Confirmar ${siguiente.etiqueta.lowercase()}")
+        sesion.metodo = siguiente
+        _estado.update { it.copy(metodo = siguiente, mensaje = Mensaje("Ahora confirmas con ${siguiente.etiqueta.lowercase()}.", error = false)) }
     }
 
     /**
@@ -324,7 +394,7 @@ class AsistenciaViewModel(app: Application) : AndroidViewModel(app) {
     fun entrarConCuenta(activity: FragmentActivity, correo: String) = ejecutar {
         val app = getApplication<Application>()
         elegirMetodoAutomatico()
-        sesion.metodo?.let { Biometria.autenticar(activity, it, "Entrar a Mesón Asiste") }
+        if (sesion.pedirHuella) sesion.metodo?.let { Biometria.autenticar(activity, it, "Entrar a Mesón Asiste") }
         sesion.abrir(correo)
         if (ubicacionConcedida(app)) sesion.permisosListos = true
         _estado.value = estadoGuardado().copy(bloqueado = false)
@@ -335,17 +405,27 @@ class AsistenciaViewModel(app: Application) : AndroidViewModel(app) {
      * Iniciar sesión con una cuenta que ya existe en el colegio: solo el correo.
      * El servidor devuelve su nombre y rol; si no existe, se avisa para crearla.
      */
-    fun iniciarSesion(correo: String) = ejecutar {
+    fun iniciarSesion(correo: String) = iniciarSesion(correo, null)
+
+    /** Cierra el cuadro de la clave del super administrador sin entrar. */
+    fun cancelarClave() = _estado.update { it.copy(pedirClave = null) }
+
+    fun iniciarSesion(correo: String, clave: String?) = ejecutar {
         val app = getApplication<Application>()
         val correoLimpio = correo.trim().lowercase()
         if (!Regex("^[a-z0-9._%+-]+@${Regex.escape(Config.DOMINIO)}$").matches(correoLimpio)) {
             throw IllegalStateException("Escribe tu correo del colegio (@${Config.DOMINIO}).")
         }
         val r = try {
-            SheetsApi.enviar("iniciarSesion", datosDelTelefono(app, correoLimpio))
+            SheetsApi.enviar("iniciarSesion", datosDelTelefono(app, correoLimpio).apply { if (clave != null) put("clave", clave) })
         } catch (e: IOException) {
             throw IllegalStateException("Para iniciar sesión se necesita internet. Revisa la conexión e inténtalo de nuevo.")
         } catch (e: ServidorException) {
+            // Super administrador en un dispositivo nuevo: se pide su clave secreta.
+            if (e.codigo == "CLAVE_SUPERADMIN") {
+                _estado.update { it.copy(pedirClave = correoLimpio to e.message.orEmpty()) }
+                return@ejecutar
+            }
             // Versión anterior del servidor: no conoce "iniciarSesion".
             if (e.message == "Acción no válida.") {
                 throw IllegalStateException(
@@ -358,6 +438,7 @@ class AsistenciaViewModel(app: Application) : AndroidViewModel(app) {
         if (!r.optBoolean("encontrado")) {
             throw IllegalStateException("No existe una cuenta con $correoLimpio. Toca \"Crear cuenta nueva\".")
         }
+        _estado.update { it.copy(pedirClave = null) }
         sesion.abrir(correoLimpio)
         sesion.nombre = r.optString("nombre", correoLimpio)
         sesion.enviadoAlServidor = true
@@ -443,7 +524,7 @@ class AsistenciaViewModel(app: Application) : AndroidViewModel(app) {
     /** Felicitación o alerta según la hora de la marca. Se calcula en el teléfono, también sin conexión. */
     private fun resultadoDe(marca: Marca): Resultado {
         val perfil = sesion.perfil
-        val todas = marcas.todas()
+        val todas = visibles()
         val minuto = minutoDelDia(marca.fechaHora)
         val hora = formatoHora(minuto)
         val nota = when {
@@ -527,7 +608,7 @@ class AsistenciaViewModel(app: Application) : AndroidViewModel(app) {
      */
     private fun validarSecuencia(tipo: TipoRegistro) {
         val ahora = System.currentTimeMillis()
-        val turnos = agruparPorDia(marcas.todas(), sesion.perfil)
+        val turnos = agruparPorDia(visibles(), sesion.perfil)
         val deHoy = turnos.firstOrNull { it.dia == inicioDelDia(ahora) }
         when (tipo) {
             TipoRegistro.ENTRADA -> if (deHoy?.entrada != null) throw IllegalStateException("Ya registraste tu entrada hoy.")
@@ -541,7 +622,32 @@ class AsistenciaViewModel(app: Application) : AndroidViewModel(app) {
     /** Turno abierto (entrada sin salida, también el de ayer si es nocturno), o null. */
     fun turnoAbierto(): com.example.asistencia.datos.Jornada? {
         val ahora = System.currentTimeMillis()
-        return agruparPorDia(marcas.todas(), sesion.perfil).firstOrNull { it.enCurso(ahora) }
+        return agruparPorDia(visibles(), sesion.perfil).firstOrNull { it.enCurso(ahora) }
+    }
+
+    /**
+     * Al marcar: envía solo las marcas pendientes (sin descargar el perfil antes), para mostrar el resultado rápido.
+     * Si algo no cuadra (teléfono no reconocido o registro sin enviar), hace la sincronización completa.
+     */
+    private suspend fun enviarPendientes() {
+        if (!sesion.enviadoAlServidor) return sincronizar()
+        sincronizando.withLock {
+            val app = getApplication<Application>()
+            for (marca in marcas.todas().filter { it.estado == EstadoMarca.PENDIENTE }.reversed()) {
+                val actualizada = try {
+                    val r = SheetsApi.enviar("registrar", datosDelTelefono(app).put("marca", marca.aJson()))
+                    marca.copy(estado = EstadoMarca.ENVIADA, detalle = "", revision = r.optString("revision"))
+                } catch (e: IOException) {
+                    return // sin conexión: queda pendiente
+                } catch (e: ServidorException) {
+                    if (e.noRegistrado || e.accesoCerrado) break // lo resuelve la sincronización completa
+                    marca.copy(estado = EstadoMarca.RECHAZADA, detalle = e.message.orEmpty())
+                }
+                marcas.actualizar(actualizada)
+                _estado.update { it.copy(marcas = visibles()) }
+            }
+        }
+        if (marcas.todas().any { it.estado == EstadoMarca.PENDIENTE }) sincronizar()
     }
 
     /**
@@ -559,12 +665,21 @@ class AsistenciaViewModel(app: Application) : AndroidViewModel(app) {
             if (!sesion.enviadoAlServidor) registrarEnServidor()
             // Primero el perfil: si el servidor no reconoce este teléfono (por ejemplo, porque se cambió a una
             // hoja nueva), se vuelve a registrar solo, antes de enviar marcas que serían rechazadas.
-            val perfil = try {
-                Perfil.deJson(SheetsApi.enviar("perfil", datosDelTelefono(app)))
+            // En la misma respuesta vienen el historial de la hoja y el ranking: una sola llamada en vez de tres.
+            val pedirPerfil = suspend {
+                SheetsApi.enviar("perfil", datosDelTelefono(app).put("historial", true).put("ranking", true)
+                    .apply { _estado.value.ranking?.mes?.let { put("mes", it) } })
+            }
+            val respuesta = try {
+                pedirPerfil()
             } catch (e: ServidorException) {
                 if (!e.noRegistrado) throw e
                 registrarEnServidor()
-                Perfil.deJson(SheetsApi.enviar("perfil", datosDelTelefono(app)))
+                pedirPerfil()
+            }
+            val perfil = Perfil.deJson(respuesta)
+            respuesta.optJSONObject("ranking")?.let { r ->
+                runCatching { Ranking.deJson(r) }.getOrNull()?.let { rk -> _estado.update { it.copy(ranking = rk) } }
             }
             // El servidor respondió: el acceso está abierto.
             if (sesion.accesoCerrado != null) {
@@ -578,7 +693,13 @@ class AsistenciaViewModel(app: Application) : AndroidViewModel(app) {
             Recordatorios.programarTodos(app)
             // Si el colegio usa QR, se pide a Google Play que deje listo el lector.
             if (perfil.sedes.any { it.metodo == MetodoVerificacion.QR.name }) CodigoQr.prepararLector(app)
-            marcas.todas().filter { it.estado == EstadoMarca.PENDIENTE }.reversed().forEach { marca ->
+            val pendientes = marcas.todas().filter { it.estado == EstadoMarca.PENDIENTE }
+            // El historial que vino con el perfil todavía no tiene las pendientes: se guarda solo si no hay.
+            respuesta.optJSONArray("dias")?.takeIf { pendientes.isEmpty() }?.let { dias ->
+                sesion.historialHoja = dias.toString()
+                _estado.update { it.copy(marcas = visibles()) }
+            }
+            pendientes.reversed().forEach { marca ->
                 val actualizada = try {
                     val r = SheetsApi.enviar("registrar", datosDelTelefono(app).put("marca", marca.aJson()))
                     marca.copy(estado = EstadoMarca.ENVIADA, detalle = "", revision = r.optString("revision"))
@@ -586,7 +707,15 @@ class AsistenciaViewModel(app: Application) : AndroidViewModel(app) {
                     marca.copy(estado = EstadoMarca.RECHAZADA, detalle = e.message.orEmpty())
                 }
                 marcas.actualizar(actualizada)
-                _estado.update { it.copy(marcas = marcas.todas()) }
+                _estado.update { it.copy(marcas = visibles()) }
+            }
+            // Historial de la hoja: si la administración corrigió una hora a mano, la app muestra la corrección.
+            if (perfil.rol.marca && (pendientes.isNotEmpty() || !respuesta.has("dias"))) {
+                runCatching { SheetsApi.enviar("misMarcas", datosDelTelefono(app)) }.getOrNull()
+                    ?.optJSONArray("dias")?.let { dias ->
+                        sesion.historialHoja = dias.toString()
+                        _estado.update { it.copy(marcas = visibles()) }
+                    }
             }
         } catch (e: IOException) {
             // Sin conexión o servidor sin configurar: queda pendiente.

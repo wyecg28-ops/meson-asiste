@@ -124,13 +124,16 @@ private fun Contenido(vm: AsistenciaViewModel) {
     val activity = LocalActivity.current as FragmentActivity
     val avisos = remember { SnackbarHostState() }
     var pestana by rememberSaveable { mutableStateOf(Pestana.INICIO) }
-    // Según el rol (lo configura el administrador): si marca asistencia ve Inicio, Resumen y Permisos;
-    // si tiene funciones de administración ve Admin. Historial está dentro de Resumen.
+    // Según el rol (lo configura el administrador): todos ven Inicio (con el ranking); si marca asistencia ve
+    // también Resumen y Permisos; si tiene funciones de administración ve Admin. Historial está dentro de Resumen.
     val pestanas = buildList {
-        if (estado.perfil.marca) addAll(listOf(Pestana.INICIO, Pestana.ESTADISTICAS, Pestana.PERMISOS))
+        add(Pestana.INICIO)
+        if (estado.perfil.marca) addAll(listOf(Pestana.ESTADISTICAS, Pestana.PERMISOS))
         if (estado.perfil.esGestor) add(Pestana.ADMIN)
         add(Pestana.PERFIL)
     }
+    // Al volver a la app y cada 3 minutos: envía pendientes y trae los cambios de la hoja de Google y el ranking.
+    AlVolverYCada(180_000, estado.correo to estado.listo) { if (estado.listo) vm.refrescar() }
     if (pestana !in pestanas) pestana = pestanas.first()
     val accesoCerrado = estado.accesoCerrado != null
 
@@ -173,21 +176,23 @@ private fun Contenido(vm: AsistenciaViewModel) {
             } else if (estado.bloqueado) {
                 PantallaBloqueo(estado, onDesbloquear = { vm.desbloquear(activity) }, onCambiarCuenta = vm::cerrarSesion)
             } else when (pestana) {
-                Pestana.INICIO -> PantallaInicio(
+                Pestana.INICIO -> if (!estado.perfil.marca) PantallaInicioGestor(estado, onMes = { vm.cargarRanking(it) })
+                else PantallaInicio(
                     estado = estado,
                     onMarcar = { tipo, observacion, actividad -> vm.marcar(activity, tipo, observacion, actividad) },
                     onPermisoDenegado = vm::mostrarError,
                     onReintentar = vm::reintentarEnvio,
                     onVerEstadisticas = { pestana = Pestana.ESTADISTICAS },
+                    onMesRanking = { vm.cargarRanking(it) },
                 )
                 Pestana.ESTADISTICAS -> ResumenEHistorial(estado)
                 Pestana.PERMISOS -> PantallaPermisos(avisos)
-                Pestana.ADMIN -> PantallaAdmin(avisos, estado.perfil)
+                Pestana.ADMIN -> PantallaAdmin(avisos, estado.perfil, estado.correo.orEmpty())
                 Pestana.PERFIL -> PantallaPerfil(
                     estado = estado,
                     onRecordatorios = vm::cambiarRecordatorios,
                     onPedirHuella = vm::cambiarPedirHuella,
-                    onCambiarMetodo = vm::cambiarMetodo,
+                    onCambiarMetodo = { vm.cambiarMetodo(activity) },
                     onReintentar = vm::reintentarEnvio,
                     onCerrarSesion = vm::cerrarSesion,
                     onQuitarCuenta = { estado.correo?.let(vm::quitarCuenta) },
@@ -270,6 +275,33 @@ private fun Configuracion(estado: EstadoUi, vm: AsistenciaViewModel, activity: F
                 CircularProgressIndicator(modifier = Modifier.size(24.dp))
                 Text("Procesando…")
             }
+        }
+        estado.pedirClave?.let { (correo, mensaje) ->
+            var clave by remember(correo) { mutableStateOf("") }
+            AlertDialog(
+                onDismissRequest = vm::cancelarClave,
+                title = { Text("Clave de super administrador") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text(mensaje)
+                        OutlinedTextField(
+                            value = clave,
+                            onValueChange = { clave = it.take(100) },
+                            label = { Text("Clave") },
+                            singleLine = true,
+                            visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Password),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { vm.iniciarSesion(correo, clave) }, enabled = clave.isNotBlank() && !estado.ocupado) {
+                        Text("Entrar")
+                    }
+                },
+                dismissButton = { TextButton(onClick = vm::cancelarClave) { Text("Cancelar") } },
+            )
         }
         Text(
             "Tus registros se guardan en la hoja de asistencia del colegio.",

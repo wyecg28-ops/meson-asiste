@@ -41,13 +41,24 @@ class Sesion(private val context: Context) {
             guardarEnLista(c)
         }
 
-    /** Si el registro de esta cuenta ya se envió a la hoja "Docentes". */
+    /** Si el registro de esta cuenta ya se envió a la hoja "Personal". */
     var enviadoAlServidor: Boolean
         get() = correo?.let { prefs.getBoolean(clave("enviado"), false) } ?: false
         set(valor) {
             val c = correo ?: return
             prefs.edit { putBoolean(clave("enviado", c), valor) }
         }
+
+    /** Historial de esta cuenta tal como está en la hoja (con correcciones de la administración), en JSON. */
+    var historialHoja: String?
+        get() = correo?.let { prefs.getString(clave("historial"), null) }
+        set(valor) {
+            val c = correo ?: return
+            prefs.edit { putString(clave("historial", c), valor).putLong(clave("historialHora", c), System.currentTimeMillis()) }
+        }
+
+    /** Cuándo se descargó [historialHoja]. */
+    val historialHojaHora: Long get() = correo?.let { prefs.getLong(clave("historialHora"), 0L) } ?: 0L
 
     /** Rol, jornada y calendario de esta cuenta, descargados del servidor. */
     var perfil: Perfil
@@ -134,7 +145,7 @@ class Sesion(private val context: Context) {
     /** Quita la cuenta de este teléfono: sus datos guardados y su historial local. */
     fun quitarCuenta(cuenta: String) {
         prefs.edit {
-            listOf("nombre", "enviado", "perfil", "acceso").forEach { remove(clave(it, cuenta)) }
+            listOf("nombre", "enviado", "perfil", "acceso", "historial", "historialHora").forEach { remove(clave(it, cuenta)) }
         }
         escribirLista(cuentas.filter { it.correo != cuenta })
         Marcas(context, cuenta).borrarTodo()

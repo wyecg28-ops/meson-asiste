@@ -68,6 +68,7 @@ fun PantallaInicio(
     onPermisoDenegado: (String) -> Unit,
     onReintentar: () -> Unit,
     onVerEstadisticas: () -> Unit,
+    onMesRanking: (String) -> Unit,
 ) {
     val context = LocalContext.current
     val perfil = estado.perfil
@@ -229,8 +230,8 @@ fun PantallaInicio(
                 }
             }
             Text(
-                if (actividad) "Confirmarás con ${estado.metodo?.etiqueta?.lowercase()}. Se guardará tu ubicación actual."
-                else "Confirmarás con ${estado.metodo?.etiqueta?.lowercase()} dentro del colegio, con el GPS activado.",
+                (estado.metodo?.let { "Confirmarás con ${it.etiqueta.lowercase()}" } ?: "Se usará tu ubicación") +
+                    if (actividad) ". Se guardará tu ubicación actual." else " dentro del colegio, con el GPS activado.",
                 style = MaterialTheme.typography.bodySmall,
                 textAlign = TextAlign.Center,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -284,6 +285,9 @@ fun PantallaInicio(
             MiniDato(semana.puntualidad?.let { "$it %" } ?: "—", "Puntualidad", Modifier.weight(1f))
             MiniDato(if (semana.minutosExtra > 0) formatoDuracionCorta(semana.minutosExtra) else "0", "Horas extra", Modifier.weight(1f))
         }
+
+        // Ranking de horas del personal (todos lo ven).
+        TarjetaRanking(estado.ranking, estado.cargandoRanking, onMesRanking)
 
         perfil.destacados?.takeIf { it.hayDatos }?.let { DestacadosSemana(it) }
     }

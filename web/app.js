@@ -101,15 +101,18 @@ const estado = {
   modoAcceso: 'iniciar',
   ocupado: false,
   accesoCerrado: null,
-  bloqueado: !!almacen.leer('credencial', null),
+  // Se pide Face ID / huella al abrir solo si está registrado en el teléfono y la persona lo quiere al iniciar sesión.
+  bloqueado: !!almacen.leer('credencial', null) && almacen.leer('loginHuella', true) !== false,
   observacion: '',
+  ranking: almacen.leer('ranking', null), // el último descargado: se ve al instante al abrir
+  cargandoRanking: false,
   actividad: false,
   conObservacion: false,
 };
 
 // Enlace directo a una pestaña: index.html?pestana=resumen
 const pestanaInicial = new URLSearchParams(location.search).get('pestana');
-if (['inicio', 'resumen', 'permisos', 'perfil'].indexOf(pestanaInicial) >= 0) estado.pestana = pestanaInicial;
+if (['inicio', 'resumen', 'permisos', 'admin', 'perfil'].indexOf(pestanaInicial) >= 0) estado.pestana = pestanaInicial;
 
 // Identificador de este teléfono para el servidor (se crea una sola vez y no se borra al cerrar sesión).
 let dispositivo = almacen.leer('dispositivo', null);
@@ -190,15 +193,25 @@ function sincronizar() {
           mostrarAviso((marca.tipo === 'ENTRADA' ? 'Entrada' : 'Salida') + ' guardada sin conexión fue rechazada: ' + e.message, true);
         }
       }
-      const perfil = await apiAutenticada('perfil');
+      // Perfil, historial y ranking llegan en una sola respuesta (más rápido que tres llamadas).
+      const pedido = { historial: true, ranking: true };
+      if (estado.ranking && estado.ranking.mes) pedido.mes = estado.ranking.mes;
+      const perfil = await apiAutenticada('perfil', pedido);
+      const { dias, ranking } = perfil;
+      delete perfil.dias;
+      delete perfil.ranking;
       estado.perfil = perfil;
       almacen.guardar('perfil', perfil);
       estado.accesoCerrado = null;
+      if (ranking && Array.isArray(ranking.lista)) {
+        estado.ranking = ranking;
+        almacen.guardar('ranking', ranking);
+      }
       if (perfil.rolInfo && perfil.rolInfo.marca === false) {
         estado.dias = [];
       } else {
-        const r = await apiAutenticada('misMarcas');
-        estado.dias = r.dias || [];
+        // Servidor publicado anterior (sin historial en el perfil): se pide aparte.
+        estado.dias = Array.isArray(dias) ? dias : ((await apiAutenticada('misMarcas')).dias || []);
         almacen.guardar('dias', estado.dias);
       }
     } catch (e) {
@@ -206,9 +219,56 @@ function sincronizar() {
     } finally {
       sincronizando = null;
       render();
+      if (!estado.ranking) cargarRanking();
     }
   })();
   return sincronizando;
+}
+
+/** Ranking de horas del mes ("2026-11"; vacío = el mes actual). Si falla, se queda el que había. */
+async function cargarRanking(mes) {
+  if (!estado.cuenta || estado.cargandoRanking) return;
+  estado.cargandoRanking = true;
+  try {
+    const r = await apiAutenticada('ranking', mes ? { mes: mes } : {});
+    if (Array.isArray(r.lista)) { estado.ranking = r; almacen.guardar('ranking', r); }
+  } catch (e) { /* solo informativo */ }
+  estado.cargandoRanking = false;
+  if (estado.pestana === 'inicio') render();
+}
+
+const MEDALLAS = { 1: '🥇', 2: '🥈', 3: '🥉' };
+
+/** Últimos 12 meses ("2026-11"…), el más reciente primero. */
+function ultimosMeses() {
+  const d = new Date();
+  const lista = [];
+  for (let i = 0; i < 12; i++) {
+    lista.push(d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'));
+    d.setMonth(d.getMonth() - 1, 1);
+  }
+  return lista;
+}
+
+/** Tarjeta del ranking de horas: quién va en primer lugar y en qué lugar va cada uno. */
+function tarjetaRanking() {
+  const r = estado.ranking;
+  const mes = (r && r.mes) || ultimosMeses()[0];
+  let html = '<div class="tarjeta"><div class="fila"><div class="crece"><h2>🏆 Ranking de horas</h2>' +
+    (r && r.miPosicion ? '<p class="chico" style="color:var(--rojo)">Vas en el lugar ' + r.miPosicion + ' de ' + r.lista.length + '</p>' : '') + '</div>' +
+    '<select id="ranking-mes" data-cambio="rankingMes" style="width:auto">' + ultimosMeses().map(m =>
+      '<option value="' + m + '"' + (m === mes ? ' selected' : '') + '>' + esc(nombreMesWeb(m)) + '</option>').join('') + '</select></div>';
+  if (estado.cargandoRanking) html += '<div class="barra"><span style="width:100%;opacity:.5"></span></div>';
+  if (!r) html += estado.cargandoRanking ? '' : '<p class="chico">No se pudo cargar el ranking. Revisa la conexión.</p>';
+  else if (!r.lista.length) html += '<p class="chico">Todavía no hay horas registradas en ' + esc(nombreMesWeb(r.mes).toLowerCase()) + '.</p>';
+  else r.lista.forEach(p => {
+    html += '<div class="fila" style="padding:6px 8px;border-radius:12px;' + (p.yo ? 'background:color-mix(in srgb, var(--rojo) 12%, transparent)' : '') + '">' +
+      '<span style="width:32px;text-align:center;font-size:' + (MEDALLAS[p.posicion] ? '1.4rem' : '1rem') + ';font-weight:600">' + (MEDALLAS[p.posicion] || p.posicion) + '</span>' +
+      '<div class="crece"><p style="font-weight:' + (p.yo || p.posicion === 1 ? 600 : 400) + '">' + esc(p.nombre) + (p.yo ? ' (tú)' : '') + '</p>' +
+      '<p class="chico">' + p.dias + (p.dias === 1 ? ' día' : ' días') + ' · ' + p.puntuales + ' puntuales' + (p.extra > 0 ? ' · ' + esc(duracion(p.extra)) + ' extra' : '') + '</p></div>' +
+      '<b>' + esc(duracion(p.minutos)) + '</b></div>';
+  });
+  return html + '</div>';
 }
 
 function quitarPendiente(id) {
@@ -462,6 +522,26 @@ function entrar(cuenta) {
   sincronizar();
 }
 
+async function iniciarSesionCon(correo, clave) {
+  let r;
+  try { r = await api('iniciarSesion', clave ? { clave: clave } : {}, correo); } catch (e) {
+    if (e instanceof SinConexion) throw new Error('Para iniciar sesión se necesita internet.');
+    if (e instanceof ErrorServidor && e.codigo === 'CLAVE_SUPERADMIN') {
+      mostrarDialogo('🔒', 'Clave de super administrador', e.message,
+        [{ texto: 'Entrar', accion: 'entrarConClave' }, { texto: 'Cancelar', accion: 'cerrarDialogo', secundario: true }],
+        '<label>Clave<input type="password" id="sa-clave" autocomplete="current-password" maxlength="100"></label>' +
+        '<input type="hidden" id="sa-correo" value="' + esc(correo) + '">');
+      setTimeout(() => { const c = $('sa-clave'); if (c) c.focus(); }, 50);
+      return;
+    }
+    throw e;
+  }
+  if (!r.encontrado) throw new Error('No existe una cuenta con ' + correo + '. Toca "Crear cuenta".');
+  cerrarDialogo();
+  entrar({ correo: correo, nombre: r.nombre || correo });
+  mostrarAviso('¡Hola, ' + (r.nombre || '').split(' ')[0] + '!');
+}
+
 const acciones = {
   modoIniciar() { estado.modoAcceso = 'iniciar'; render(); },
   modoCrear() { estado.modoAcceso = 'crear'; render(); },
@@ -469,14 +549,16 @@ const acciones = {
   iniciarSesion() {
     conOcupado(async () => {
       const correo = validarCorreo($('correo').value);
-      let r;
-      try { r = await api('iniciarSesion', {}, correo); } catch (e) {
-        if (e instanceof SinConexion) throw new Error('Para iniciar sesión se necesita internet.');
-        throw e;
-      }
-      if (!r.encontrado) throw new Error('No existe una cuenta con ' + correo + '. Toca "Crear cuenta".');
-      entrar({ correo: correo, nombre: r.nombre || correo });
-      mostrarAviso('¡Hola, ' + (r.nombre || '').split(' ')[0] + '!');
+      await iniciarSesionCon(correo, null);
+    });
+  },
+
+  // Super administrador en un dispositivo nuevo: se confirma con su clave secreta.
+  entrarConClave() {
+    conOcupado(async () => {
+      const clave = $('sa-clave').value;
+      if (!clave) throw new Error('Escribe tu clave.');
+      await iniciarSesionCon($('sa-correo').value, clave);
     });
   },
 
@@ -503,6 +585,7 @@ const acciones = {
   },
 
   pestana(b) { estado.pestana = b.dataset.valor; render(); window.scrollTo(0, 0); },
+  rankingMes(s) { cargarRanking(s.value); },
   subResumen(b) { estado.subResumen = b.dataset.valor; render(); },
   periodo(b) { estado.periodo = b.dataset.valor; render(); },
   conObservacion() { estado.conObservacion = true; render(); },
@@ -554,12 +637,18 @@ const acciones = {
     });
   },
 
+  loginHuella(b) {
+    almacen.guardar('loginHuella', b.checked);
+    mostrarAviso(b.checked ? 'Iniciar sesión con Face ID / huella: activado.' : 'Iniciar sesión con Face ID / huella: desactivado. Al marcar se sigue pidiendo.');
+    render();
+  },
+
   biometria(b) {
     const activar = b.checked;
     conOcupado(async () => {
       if (activar) {
         await activarBiometria().catch(() => { throw new Error('No se pudo activar. Revisa que el teléfono tenga Face ID, huella o código.'); });
-        mostrarAviso('Listo: se pedirá Face ID / huella al abrir y al marcar.');
+        mostrarAviso('Listo: se pedirá Face ID / huella al marcar (y al abrir, si lo dejas activado).');
       } else {
         await verificarIdentidad();
         almacen.guardar('credencial', null);
@@ -579,7 +668,7 @@ const acciones = {
       cerrarDialogo();
       return mostrarAviso('Tienes marcas sin enviar. Conéctate a internet y espera a que se envíen antes de cerrar sesión.', true);
     }
-    ['cuenta', 'perfil', 'dias', 'credencial'].forEach(c => almacen.guardar(c, null));
+    ['cuenta', 'perfil', 'dias', 'ranking', 'credencial'].forEach(c => almacen.guardar(c, null));
     Object.assign(estado, { cuenta: null, perfil: null, dias: [], solicitudes: null, bloqueado: false, accesoCerrado: null });
     cerrarDialogo();
     render();
@@ -605,7 +694,7 @@ const acciones = {
         if (e instanceof SinConexion) throw new Error('Para liberar el teléfono se necesita internet.');
         throw e;
       }
-      ['cuenta', 'perfil', 'dias', 'credencial'].forEach(c => almacen.guardar(c, null));
+      ['cuenta', 'perfil', 'dias', 'ranking', 'credencial'].forEach(c => almacen.guardar(c, null));
       Object.assign(estado, { cuenta: null, perfil: null, dias: [], solicitudes: null, bloqueado: false, accesoCerrado: null });
       mostrarAviso(r.mensaje || 'Teléfono liberado.');
     });
@@ -781,8 +870,7 @@ function pantallaInicio() {
     '</div>';
 
   if (!marcaAsistencia()) {
-    return html + '<div class="tarjeta"><h2>' + esc((p.rolInfo && p.rolInfo.nombre) || 'Tu rol') + '</h2>' +
-      '<p class="chico">Tu rol no marca asistencia. Las funciones de administración se usan desde la app de Android.</p></div>' + tarjetaInstalar();
+    return html + tarjetaRanking() + destacados() + tarjetaInstalar();
   }
 
   const aviso = diaLibre(hoy) || entradaEspecial(hoy) || eventosDel(hoy).find(porHoras);
@@ -847,7 +935,7 @@ function pantallaInicio() {
   html += '<div class="fila"><h2 class="crece">Esta semana</h2><button class="boton texto" data-accion="pestana" data-valor="resumen">Ver más</button></div>' +
     '<div class="rejilla-3">' + mini('🔥 ' + e.racha, 'Racha puntual') + mini(e.puntualidad == null ? '—' : e.puntualidad + ' %', 'Puntualidad') +
     mini(e.extra ? duracion(e.extra) : '0', 'Horas extra') + '</div>';
-  html += destacados() + tarjetaInstalar();
+  html += tarjetaRanking() + destacados() + tarjetaInstalar();
   return html;
 }
 
@@ -924,6 +1012,7 @@ function pantallaPermisos() {
       '<p class="chico">“' + esc(s.motivo) + '”</p>' +
       (s.respuesta ? '<p class="chico">Respuesta: ' + esc(s.respuesta) + '</p>' : '') +
       (s.estado === 'PENDIENTE' ? '<button class="boton texto peligro" style="align-self:flex-start" data-accion="cancelarSolicitud" data-valor="' + esc(s.id) + '">Cancelar solicitud</button>' : '') +
+      '<button class="boton texto" style="align-self:flex-start" data-accion="solicitudPdf" data-valor="' + esc(s.id) + '">Descargar PDF para firmar</button>' +
       '</div>';
   });
   return html;
@@ -968,14 +1057,21 @@ function pantallaPerfil() {
     html += filaDato('Meta diaria', (p.horasMeta || 8) + ' h (o lo que dure tu horario)') +
       '<p class="chico">El rol y la jornada los asigna la dirección. Lo que trabajes después de la meta suma como horas extra.</p>';
   } else if (!marcaAsistencia()) {
-    html += '<p class="chico">Las funciones de administración se usan desde la app de Android.</p>';
+    html += '<p class="chico">Tus funciones de administración están en la pestaña Admin.</p>';
   }
   html += '<button class="boton texto" style="align-self:flex-start" data-accion="actualizar"' + (estado.ocupado ? ' disabled' : '') + '>Actualizar</button></div>';
 
+  const conCredencial = !!almacen.leer('credencial', null);
   html += '<div class="tarjeta"><h2>Seguridad</h2><label class="interruptor"><input type="checkbox" id="biometria"' +
-    (almacen.leer('credencial', null) ? ' checked' : '') + (biometria ? '' : ' disabled') + '>' +
-    '<span class="crece">Pedir Face ID / huella<br><span class="chico">' +
-    (biometria ? 'Al abrir la app y al marcar entrada o salida.' : 'Este teléfono o navegador no lo permite.') + '</span></span></label></div>';
+    (conCredencial ? ' checked' : '') + (biometria ? '' : ' disabled') + '>' +
+    '<span class="crece">Confirmar con Face ID / huella<br><span class="chico">' +
+    (biometria ? 'Se pide al marcar entrada o salida, para que nadie marque por ti.' : 'Este teléfono no tiene Face ID, huella ni código: se marca solo con la ubicación.') +
+    '</span></span></label>' +
+    '<label class="interruptor"><input type="checkbox" id="login-huella"' + (conCredencial && almacen.leer('loginHuella', true) !== false ? ' checked' : '') +
+    (conCredencial ? '' : ' disabled') + ' data-cambio="loginHuella">' +
+    '<span class="crece">Iniciar sesión con Face ID / huella<br><span class="chico">' +
+    (conCredencial ? 'Al abrir la app. Si lo desactivas, entras sin confirmar (al marcar se sigue pidiendo).' : 'Activa primero "Confirmar con Face ID / huella".') +
+    '</span></span></label></div>';
 
   html += tarjetaInstalar();
   html += '<div class="tarjeta"><h2>Cuenta</h2><p class="chico">Este teléfono queda registrado con tu correo. ' +
@@ -1015,8 +1111,9 @@ function nombreTipo(t) {
 
 const PESTANAS = [
   { id: 'inicio', texto: 'Inicio', icono: '🏠' },
-  { id: 'resumen', texto: 'Resumen', icono: '📊' },
-  { id: 'permisos', texto: 'Permisos', icono: '📝' },
+  { id: 'resumen', texto: 'Resumen', icono: '📊', marca: true },
+  { id: 'permisos', texto: 'Permisos', icono: '📝', marca: true },
+  { id: 'admin', texto: 'Admin', icono: '🛠️', admin: true },
   { id: 'perfil', texto: 'Perfil', icono: '👤' },
 ];
 
@@ -1032,9 +1129,9 @@ function render() {
   else if (!estado.perfil) html = '<p class="cargando">Cargando tu perfil…</p>' + (estado.ocupado ? '' : '<button class="boton secundario" data-accion="actualizar">Reintentar</button>');
   else {
     conPestanas = true;
-    const visibles = marcaAsistencia() ? PESTANAS : PESTANAS.filter(p => p.id === 'inicio' || p.id === 'perfil');
+    const visibles = PESTANAS.filter(p => (!p.marca || marcaAsistencia()) && (!p.admin || gestionaWeb()));
     if (!visibles.some(p => p.id === estado.pestana)) estado.pestana = 'inicio';
-    html = ({ inicio: pantallaInicio, resumen: pantallaResumen, permisos: pantallaPermisos, perfil: pantallaPerfil })[estado.pestana]();
+    html = ({ inicio: pantallaInicio, resumen: pantallaResumen, permisos: pantallaPermisos, admin: pantallaAdmin, perfil: pantallaPerfil })[estado.pestana]();
     nav.innerHTML = visibles.map(p => '<button class="' + (p.id === estado.pestana ? 'activa' : '') + '" data-accion="pestana" data-valor="' + p.id + '">' +
       '<span class="icono">' + p.icono + '</span>' + p.texto + '</button>').join('');
   }
@@ -1060,7 +1157,7 @@ function actualizarReloj() {
 document.addEventListener('click', e => {
   const b = e.target.closest('[data-accion]');
   if (!b || b.tagName === 'INPUT' || b.tagName === 'SELECT') return;
-  const accion = acciones[b.dataset.accion];
+  const accion = acciones[b.dataset.accion] || accionesAdmin[b.dataset.accion];
   if (accion) { e.preventDefault(); accion(b); }
 });
 
@@ -1068,16 +1165,21 @@ document.addEventListener('change', e => {
   const t = e.target;
   if (t.id === 'actividad') { estado.actividad = t.checked; render(); }
   else if (t.id === 'biometria') acciones.biometria(t);
-  else if (t.dataset && t.dataset.cambio && acciones[t.dataset.cambio]) acciones[t.dataset.cambio](t);
+  else if (t.dataset && t.dataset.cambio) {
+    const accion = acciones[t.dataset.cambio] || accionesAdmin[t.dataset.cambio];
+    if (accion) accion(t);
+  }
 });
 
 document.addEventListener('input', e => {
   if (e.target.id === 'observacion') estado.observacion = e.target.value;
+  else if (e.target.dataset && e.target.dataset.entrada && accionesAdmin[e.target.dataset.entrada]) accionesAdmin[e.target.dataset.entrada](e.target);
 });
 
 document.addEventListener('keydown', e => {
-  if (e.key !== 'Enter' || !['correo', 'nombre'].includes(e.target.id)) return;
+  if (e.key !== 'Enter' || !['correo', 'nombre', 'sa-clave'].includes(e.target.id)) return;
   e.preventDefault();
+  if (e.target.id === 'sa-clave') return acciones.entrarConClave();
   acciones[estado.modoAcceso === 'crear' ? 'crearCuenta' : 'iniciarSesion']();
 });
 
@@ -1087,6 +1189,14 @@ setInterval(() => {
   const activo = document.activeElement;
   if (estado.cuenta && !estado.ocupado && !(activo && ['INPUT', 'TEXTAREA', 'SELECT'].includes(activo.tagName)) && $('dialogo').hidden) render();
 }, 60000);
+
+setInterval(() => {
+  const libre = document.visibilityState === 'visible' && estado.cuenta && !estado.bloqueado && !estado.ocupado && $('dialogo').hidden;
+  if (libre) sincronizar();
+}, 180000);
+setInterval(() => {
+  if (document.visibilityState === 'visible' && estado.pestana === 'admin' && $('dialogo').hidden && !estado.ocupado) cargarSeccionAdmin(true);
+}, 120000);
 
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && estado.cuenta && !estado.bloqueado) sincronizar();

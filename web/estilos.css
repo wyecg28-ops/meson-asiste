@@ -220,3 +220,33 @@ textarea { resize: vertical; min-height: 70px; }
 .lista-dato { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; }
 .lista-dato span:first-child { color: var(--texto-2); }
 .lista-dato span:last-child { text-align: right; font-weight: 500; }
+
+/* Tablas de reportes (panel Admin) */
+.tabla-envoltura { overflow-x: auto; background: var(--superficie); border-radius: 16px; box-shadow: var(--sombra); }
+.tabla { border-collapse: collapse; font-size: .82rem; min-width: 100%; }
+.tabla th, .tabla td { padding: 8px 10px; text-align: left; white-space: nowrap; border-bottom: 1px solid var(--borde); }
+.tabla thead th { background: color-mix(in srgb, var(--rojo) 14%, transparent); }
+.tabla tfoot th { background: var(--superficie-2); }
+.tabla tbody tr:nth-child(even) td { background: color-mix(in srgb, var(--texto) 4%, transparent); }
+input[type=range] { accent-color: var(--rojo); border: none; }
+.dialogo .interruptor input[type=radio] { width: 20px; height: 20px; accent-color: var(--rojo); }
+
+/* Panel: cambio de pestaña deslizando */
+#admin-contenido { display: flex; flex-direction: column; gap: 16px; }
+#admin-contenido.desde-derecha { animation: entrar-derecha .22s ease-out; }
+#admin-contenido.desde-izquierda { animation: entrar-izquierda .22s ease-out; }
+@keyframes entrar-derecha { from { transform: translateX(40px); opacity: .3; } to { transform: none; opacity: 1; } }
+@keyframes entrar-izquierda { from { transform: translateX(-40px); opacity: .3; } to { transform: none; opacity: 1; } }
+
+/* Reportes en tarjetas */
+.mosaicos { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.mosaico { padding: 10px 12px; gap: 2px; }
+.mosaico b { font-size: 1.25rem; }
+.tarjeta-reporte { text-align: left; font: inherit; color: inherit; border: none; cursor: pointer; width: 100%; }
+.tarjeta-reporte .derecha { text-align: right; }
+.tarjeta-reporte .derecha b { font-size: 1.1rem; }
+.etiquetas { display: flex; flex-wrap: wrap; gap: 6px; }
+.lista-dias { padding: 0; gap: 0; overflow: hidden; }
+.fila-dia { display: flex; align-items: center; gap: 10px; padding: 10px 14px; }
+.fila-dia:nth-child(even) { background: rgba(127, 127, 127, .07); }
+.fecha-dia { width: 58px; flex-shrink: 0; }

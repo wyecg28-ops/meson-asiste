@@ -11,3 +11,6 @@ tanto en el código fuente como en la pantalla "Acerca de" de la aplicación, se
 
 
 Este proyecto incluye jsQR (https://github.com/cozmo/jsQR), licencia Apache 2.0, en web/vendor/.
+
+La versión web incluye además, en web/vendor/: jsPDF y jspdf-autotable (licencia MIT, para los reportes en PDF) y
+qrcode-generator de Kazuhiko Arase (licencia MIT, para mostrar el QR de la entrada).

@@ -28,8 +28,8 @@ enum class Permiso(val etiqueta: String) {
 }
 
 /**
- * Rol de una persona (hoja "Roles", lo administra el administrador): si marca asistencia y qué funciones de
- * administración tiene. "ADMINISTRADOR" tiene todas.
+ * Rol de una persona (hoja "Roles"): si marca asistencia y qué funciones de administración tiene.
+ * "SUPERADMIN" (super administrador) tiene todas y es el único que decide las del "ADMINISTRADOR".
  */
 data class Rol(
     val codigo: String,
@@ -38,18 +38,26 @@ data class Rol(
     val permisos: Set<Permiso>,
 ) {
     val etiqueta get() = nombre
-    val esAdministrador get() = codigo == "ADMINISTRADOR"
+    val esSuperAdmin get() = codigo == SUPERADMIN
+
+    /** Super administrador o Administrador. */
+    val esAdministrador get() = esSuperAdmin || codigo == ADMINISTRADOR
+
+    /** Solo el super administrador puede editar estos roles o asignarlos. */
+    val protegido get() = codigo == SUPERADMIN || codigo == ADMINISTRADOR
 
     /** Tiene alguna función de administración: ve el panel Admin. */
-    val gestiona get() = esAdministrador || permisos.isNotEmpty()
+    val gestiona get() = esSuperAdmin || permisos.isNotEmpty()
 
-    fun puede(permiso: Permiso) = esAdministrador || permiso in permisos
+    fun puede(permiso: Permiso) = esSuperAdmin || permiso in permisos
 
     fun aJson(): JSONObject = JSONObject()
         .put("codigo", codigo).put("nombre", nombre).put("marca", marca)
         .put("permisos", JSONArray(permisos.map { it.name }))
 
     companion object {
+        const val SUPERADMIN = "SUPERADMIN"
+        const val ADMINISTRADOR = "ADMINISTRADOR"
         val DOCENTE = Rol("DOCENTE", "Docente", marca = true, permisos = emptySet())
 
         fun deJson(j: JSONObject) = Rol(
