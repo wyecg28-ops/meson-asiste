@@ -1,0 +1,7 @@
+{
+    "versionCode":  2,
+    "versionName":  "1.1",
+    "apk":  "https://github.com/wyecg28-ops/meson-asiste/releases/download/v1.1/MesonAsiste-1.1.apk",
+    "sha256":  "a606d49917da0b426f21e052846ed99ee83a390d83366e099577644f7d397944",
+    "notas":  "Primera versión oficial: la app se actualiza sola con un aviso. Los permisos por horas se descuentan de las horas trabajadas y cuentan para la meta."
+}
