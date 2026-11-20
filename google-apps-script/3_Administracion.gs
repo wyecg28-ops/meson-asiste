@@ -515,16 +515,12 @@ function resumenDelAnio(anio) {
  */
 function rankingDelMes(u, mesPedido) {
   const mes = /^\d{4}-\d{2}$/.test(String(mesPedido || '')) ? String(mesPedido) : fechaDesplazada(0).substring(0, 7);
-  const cache = CacheService.getScriptCache();
-  const clave = 'ranking:' + mes;
-  let lista = cache.get(clave) ? JSON.parse(cache.get(clave)) : null;
+  // Normalmente ya está calculado (cada hora y unos segundos después de cada cambio): abrir la app no espera.
+  const guardado = CacheService.getScriptCache().get('ranking:' + mes);
+  let lista = guardado ? JSON.parse(guardado) : null;
   if (!lista) {
-    lista = adminReporte({ mes: mes }).resumen
-      .filter(r => r.estado !== ESTADOS.INACTIVO && (r.dias > 0 || r.minutos > 0))
-      .map(r => ({ correo: r.correo, nombre: r.nombre, minutos: r.minutos, dias: r.dias, puntuales: r.puntuales,
-        tardes: r.tardes, extra: r.extra }))
-      .sort((a, b) => b.minutos - a.minutos || b.dias - a.dias || String(a.nombre).localeCompare(String(b.nombre)));
-    cache.put(clave, JSON.stringify(lista), 300);
+    lista = listaRankingDe(adminReporte({ mes: mes }).resumen);
+    guardarRanking(mes, lista);
   }
   let miPosicion = 0;
   const publica = lista.map((x, i) => {
@@ -534,6 +530,20 @@ function rankingDelMes(u, mesPedido) {
       tardes: x.tardes, extra: x.extra, yo: x.correo === u.correo };
   });
   return { ok: true, mes: mes, lista: publica, miPosicion: miPosicion };
+}
+
+/** Ranking a partir del resumen del mes: por horas, sin inactivos ni quien no tiene registros. */
+function listaRankingDe(resumen) {
+  return resumen
+    .filter(r => r.estado !== ESTADOS.INACTIVO && (r.dias > 0 || r.minutos > 0))
+    .map(r => ({ correo: r.correo, nombre: r.nombre, minutos: r.minutos, dias: r.dias, puntuales: r.puntuales,
+      tardes: r.tardes, extra: r.extra }))
+    .sort((a, b) => b.minutos - a.minutos || b.dias - a.dias || String(a.nombre).localeCompare(String(b.nombre)));
+}
+
+/** Guarda el ranking listo para 6 horas (se renueva antes, cada hora y tras cada cambio). */
+function guardarRanking(mes, lista) {
+  CacheService.getScriptCache().put('ranking:' + mes, JSON.stringify(lista), 21600);
 }
 
 /**
@@ -668,6 +678,8 @@ function actualizarReportes() {
 function refrescarPestanas() {
   const mes = fechaDesplazada(0).substring(0, 7);
   const r = adminReporte({ mes: mes });
+  guardarRanking(mes, listaRankingDe(r.resumen));
+  try { calcularDestacados(); } catch (e) { console.log('Destacados: ' + e.message); }
   const horas = min => Math.round(min / 60 * 100) / 100;
   const fecha = f => f.split('-').reverse().join('-'); // 2026-11-03 → 03-11-2026, como en el sistema anterior
   escribirReporte(RESUMEN_GLOBAL, r.resumen.map(x => [x.nombre, x.rol, x.jornada, x.estado, horas(x.minutos), x.dias,
@@ -689,19 +701,13 @@ const AFECTA_REPORTES = ['registrar', 'registrarDocente', 'adminAsignar', 'admin
   'adminGuardarJornada', 'adminEliminarJornada', 'adminAgregarEvento', 'adminEliminarEvento', 'adminRevisarActividad',
   'adminRevisarSolicitud', 'adminGuardarReglas', 'adminGuardarRol', 'adminEliminarRol'];
 
-/** El ranking y los destacados guardados en memoria se vuelven a calcular con los datos nuevos. */
-function limpiarCacheReportes() {
-  CacheService.getScriptCache().removeAll(['ranking:' + fechaDesplazada(0).substring(0, 7), 'destacados']);
-}
-
 /**
- * Algo cambió desde la app: se borra la memoria del ranking y, en unos segundos (sin hacer esperar a quien hizo
- * el cambio), se actualizan las pestañas de reporte. Varios cambios seguidos se juntan en una sola actualización.
+ * Algo cambió desde la app: en unos segundos (sin hacer esperar a nadie) se actualizan las pestañas de reporte,
+ * el ranking y los destacados. Varios cambios seguidos se juntan en una sola actualización.
  */
 function cambiaronDatos(accion) {
   try {
-    // Una marca no borra el ranking (se renueva solo cada 5 minutos): así no se recalcula con cada entrada.
-    if (accion !== 'registrar') limpiarCacheReportes();
+    // No se borra el ranking: unos segundos después se recalcula en segundo plano (nadie espera ese cálculo).
     const props = PropertiesService.getScriptProperties();
     const pendiente = Number(props.getProperty('REFRESCO_REPORTES') || 0);
     if (pendiente && Date.now() - pendiente < 10 * 60 * 1000) return; // ya hay una actualización en camino

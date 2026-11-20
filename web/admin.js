@@ -70,6 +70,32 @@ async function pedirAdmin(accion, extra) {
   }
 }
 
+const CAMPOS_PANEL = ['hoy', 'solicitudes', 'miembros', 'roles', 'jornadasLista', 'jornadas', 'rolesEnUso', 'eventos',
+  'actividades', 'config', 'reporte', 'anual'];
+
+/** Lo último que se vio en el panel se guarda en el teléfono (por cuenta) para mostrarlo al instante al volver. */
+function guardarPanel() {
+  if (!estado.cuenta) return;
+  const datos = {};
+  CAMPOS_PANEL.forEach(c => { datos[c] = adm[c]; });
+  try { almacen.guardar('panel', { correo: estado.cuenta.correo, fecha: claveDia(new Date()), datos: datos }); } catch (e) { /* sin espacio */ }
+}
+
+/** Al cerrar sesión: el panel en memoria vuelve a estar vacío (otra cuenta no ve nada de la anterior). */
+function reiniciarPanel() {
+  CAMPOS_PANEL.forEach(c => { adm[c] = null; });
+  adm.roles = []; adm.jornadasLista = []; adm.seccion = null; adm.restaurado = false;
+}
+
+function restaurarPanel() {
+  if (adm.restaurado || !estado.cuenta) return;
+  adm.restaurado = true;
+  const p = almacen.leer('panel', null);
+  if (!p || p.correo !== estado.cuenta.correo || !p.datos) return;
+  CAMPOS_PANEL.forEach(c => { if (adm[c] == null && p.datos[c] != null) adm[c] = p.datos[c]; });
+  if (p.fecha !== claveDia(new Date())) adm.hoy = null; // "Hoy" de otro día no sirve
+}
+
 async function cargarSeccionAdmin(silencioso) {
   const s = adm.seccion;
   if (!s || adm.cargando) return;
@@ -87,6 +113,7 @@ async function cargarSeccionAdmin(silencioso) {
     } else if (s === 'revision') adm.actividades = (await pedirAdmin('adminActividades')).actividades || [];
     else if (s === 'reportes') await cargarReporteAdmin();
     else if (s === 'ajustes') adm.config = await pedirAdmin('adminConfig');
+    guardarPanel();
   } catch (e) {
     if (!manejarErrorAcceso(e)) mostrarAviso(e.message, true);
   } finally {
@@ -136,6 +163,7 @@ function hacerAdmin(accion, extra, despues) {
 // ---------------------------------------------------------------- Pantalla
 
 function pantallaAdmin() {
+  restaurarPanel();
   const secciones = SECCIONES_ADMIN.filter(s => puedeWeb(s.permiso));
   if (!secciones.length) return '<h1>Administración</h1><p class="chico">Tu rol no tiene funciones de administración.</p>';
   if (!secciones.some(s => s.id === adm.seccion)) { adm.seccion = secciones[0].id; setTimeout(() => cargarSeccionAdmin(), 0); }

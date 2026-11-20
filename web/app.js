@@ -697,8 +697,9 @@ const acciones = {
       cerrarDialogo();
       return mostrarAviso('Tienes marcas sin enviar. Conéctate a internet y espera a que se envíen antes de cerrar sesión.', true);
     }
-    ['cuenta', 'perfil', 'dias', 'ranking', 'credencial'].forEach(c => almacen.guardar(c, null));
-    Object.assign(estado, { cuenta: null, perfil: null, dias: [], solicitudes: null, bloqueado: false, accesoCerrado: null });
+    ['cuenta', 'perfil', 'dias', 'ranking', 'panel', 'credencial'].forEach(c => almacen.guardar(c, null));
+    Object.assign(estado, { cuenta: null, perfil: null, dias: [], ranking: null, solicitudes: null, bloqueado: false, accesoCerrado: null });
+    reiniciarPanel();
     cerrarDialogo();
     render();
   },
@@ -723,8 +724,9 @@ const acciones = {
         if (e instanceof SinConexion) throw new Error('Para liberar el teléfono se necesita internet.');
         throw e;
       }
-      ['cuenta', 'perfil', 'dias', 'ranking', 'credencial'].forEach(c => almacen.guardar(c, null));
-      Object.assign(estado, { cuenta: null, perfil: null, dias: [], solicitudes: null, bloqueado: false, accesoCerrado: null });
+      ['cuenta', 'perfil', 'dias', 'ranking', 'panel', 'credencial'].forEach(c => almacen.guardar(c, null));
+      Object.assign(estado, { cuenta: null, perfil: null, dias: [], ranking: null, solicitudes: null, bloqueado: false, accesoCerrado: null });
+    reiniciarPanel();
       mostrarAviso(r.mensaje || 'Teléfono liberado.');
     });
   },

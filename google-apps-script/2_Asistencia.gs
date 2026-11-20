@@ -801,12 +801,16 @@ function cancelarSolicitud(u, id) {
 
 /**
  * Mejor racha de llegadas puntuales y quien suma más horas en la semana (de lunes a hoy), entre el personal
- * que marca. Se guarda 30 minutos en caché para no leer todas las hojas en cada petición.
+ * que marca. Se calcula por adelantado (cada hora y tras cada cambio) para no leer todas las hojas al abrir la app.
  */
 function destacadosSemana() {
+  const guardado = CacheService.getScriptCache().get('destacados');
+  return guardado ? JSON.parse(guardado) : calcularDestacados();
+}
+
+/** Calcula los destacados y los deja listos 6 horas (se renuevan cada hora y tras cada cambio). */
+function calcularDestacados() {
   const cache = CacheService.getScriptCache();
-  const guardado = cache.get('destacados');
-  if (guardado) return JSON.parse(guardado);
   const hoy = fechaDesplazada(0);
   const lunes = fechaDesplazada(-(diaIso(hoy) - 1));
   const eventos = leerEventos();
@@ -836,7 +840,7 @@ function destacadosSemana() {
     if (minutos > 0 && (!masHoras || minutos > masHoras.minutos)) masHoras = { nombre: m.nombre, minutos: minutos };
   });
   const resultado = { semana: lunes, mejorRacha: mejorRacha, masHoras: masHoras };
-  cache.put('destacados', JSON.stringify(resultado), 1800);
+  cache.put('destacados', JSON.stringify(resultado), 21600);
   return resultado;
 }
 
@@ -874,8 +878,7 @@ function onEdit(e) {
       cambio = true;
     }
     if (cambio) {
-      limpiarCacheReportes();
-      refrescarPestanas();
+      refrescarPestanas(); // también deja listos el ranking y los destacados con la corrección
     }
   } catch (err) {
     console.log('No se pudo aplicar el cambio hecho en la hoja: ' + err.message);

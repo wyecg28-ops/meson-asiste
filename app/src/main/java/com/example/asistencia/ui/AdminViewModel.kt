@@ -11,6 +11,7 @@ import com.example.asistencia.datos.Evento
 import com.example.asistencia.datos.Horario
 import com.example.asistencia.datos.Rol
 import com.example.asistencia.datos.Sede
+import com.example.asistencia.datos.Sesion
 import com.example.asistencia.datos.Solicitud
 import com.example.asistencia.ubicacion.Ubicacion
 import com.example.asistencia.verificacion.MetodoVerificacion
@@ -182,43 +183,45 @@ class AdminViewModel(app: Application) : AndroidViewModel(app) {
     val estado = _estado.asStateFlow()
 
     fun cargarHoy() = ejecutar {
-        val r = pedir("adminHoy")
-        _estado.update { it.copy(hoy = lista(r.getJSONArray("miembros")) { j ->
-            AsistenciaHoy(
-                nombre = j.getString("nombre"),
-                rol = j.optString("rol"),
-                jornada = j.optString("jornada"),
-                entrada = j.optString("entrada"),
-                salida = j.optString("salida"),
-                horas = j.optString("horas"),
-                estado = EstadoAsistencia.entries.firstOrNull { it.name == j.optString("estado") }
-                    ?: EstadoAsistencia.SIN_MARCAR,
-                detalle = j.optString("detalle"),
-            )
-        }.sortedWith(compareBy({ it.estado.ordinal }, { it.nombre })) ) }
+        consultar("adminHoy") { r ->
+            _estado.update { it.copy(hoy = lista(r.getJSONArray("miembros")) { j ->
+                AsistenciaHoy(
+                    nombre = j.getString("nombre"),
+                    rol = j.optString("rol"),
+                    jornada = j.optString("jornada"),
+                    entrada = j.optString("entrada"),
+                    salida = j.optString("salida"),
+                    horas = j.optString("horas"),
+                    estado = EstadoAsistencia.entries.firstOrNull { it.name == j.optString("estado") }
+                        ?: EstadoAsistencia.SIN_MARCAR,
+                    detalle = j.optString("detalle"),
+                )
+            }.sortedWith(compareBy({ it.estado.ordinal }, { it.nombre })) ) }
+        }
     }
 
     fun cargarMiembros() = ejecutar { leerMiembros() }
 
     private suspend fun leerMiembros() {
-        val r = pedir("adminMiembros")
-        _estado.update {
-            it.copy(
-                miembros = lista(r.getJSONArray("miembros")) { j ->
-                    Miembro(
-                        correo = j.getString("correo"),
-                        nombre = j.getString("nombre"),
-                        rol = j.optString("rol", "DOCENTE"),
-                        rolNombre = j.optString("rolNombre", j.optString("rol")),
-                        jornada = j.optString("jornada"),
-                        modelo = j.optString("modelo"),
-                        conTelefono = j.optBoolean("conTelefono"),
-                        activo = j.optString("estado", "ACTIVO") == "ACTIVO",
-                    )
-                }.sortedBy { m -> m.nombre },
-                horarios = lista(r.getJSONArray("jornadas"), Horario::deJson),
-                roles = r.optJSONArray("roles")?.let(::leerListaRoles) ?: it.roles,
-            )
+        consultar("adminMiembros") { r ->
+            _estado.update {
+                it.copy(
+                    miembros = lista(r.getJSONArray("miembros")) { j ->
+                        Miembro(
+                            correo = j.getString("correo"),
+                            nombre = j.getString("nombre"),
+                            rol = j.optString("rol", "DOCENTE"),
+                            rolNombre = j.optString("rolNombre", j.optString("rol")),
+                            jornada = j.optString("jornada"),
+                            modelo = j.optString("modelo"),
+                            conTelefono = j.optBoolean("conTelefono"),
+                            activo = j.optString("estado", "ACTIVO") == "ACTIVO",
+                        )
+                    }.sortedBy { m -> m.nombre },
+                    horarios = lista(r.getJSONArray("jornadas"), Horario::deJson),
+                    roles = r.optJSONArray("roles")?.let(::leerListaRoles) ?: it.roles,
+                )
+            }
         }
     }
 
@@ -242,10 +245,11 @@ class AdminViewModel(app: Application) : AndroidViewModel(app) {
     fun cargarJornadas() = ejecutar { leerJornadas() }
 
     private suspend fun leerJornadas() {
-        val r = pedir("adminJornadas")
-        val enUso = r.optJSONObject("enUso") ?: JSONObject()
-        val lista = lista(r.getJSONArray("jornadas"), Horario::deJson)
-        _estado.update { it.copy(jornadas = lista.map { h -> h to enUso.optInt(h.codigo, 0) }, horarios = lista) }
+        consultar("adminJornadas") { r ->
+            val enUso = r.optJSONObject("enUso") ?: JSONObject()
+            val lista = lista(r.getJSONArray("jornadas"), Horario::deJson)
+            _estado.update { it.copy(jornadas = lista.map { h -> h to enUso.optInt(h.codigo, 0) }, horarios = lista) }
+        }
     }
 
     /** Crea (código vacío) o edita una jornada. */
@@ -273,8 +277,9 @@ class AdminViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private suspend fun leerEventos() {
-        val r = pedir("adminEventos")
-        _estado.update { it.copy(eventos = lista(r.getJSONArray("eventos"), Evento::deJson).sortedBy { e -> e.desde }) }
+        consultar("adminEventos") { r ->
+            _estado.update { it.copy(eventos = lista(r.getJSONArray("eventos"), Evento::deJson).sortedBy { e -> e.desde }) }
+        }
     }
 
     fun agregarEvento(evento: Evento) = guardarEnServidor {
@@ -292,19 +297,20 @@ class AdminViewModel(app: Application) : AndroidViewModel(app) {
     fun cargarActividades() = ejecutar { leerActividades() }
 
     private suspend fun leerActividades() {
-        val r = pedir("adminActividades")
-        _estado.update { it.copy(actividades = lista(r.getJSONArray("actividades")) { j ->
-            ActividadPorRevisar(
-                id = j.getString("id"),
-                fecha = j.optString("fecha"),
-                nombre = j.optString("nombre"),
-                entrada = j.optString("entrada"),
-                salida = j.optString("salida"),
-                descripcion = j.optString("descripcion"),
-                ubicacion = j.optString("ubicacion"),
-                correo = j.optString("correo"),
-            )
-        }) }
+        consultar("adminActividades") { r ->
+            _estado.update { it.copy(actividades = lista(r.getJSONArray("actividades")) { j ->
+                ActividadPorRevisar(
+                    id = j.getString("id"),
+                    fecha = j.optString("fecha"),
+                    nombre = j.optString("nombre"),
+                    entrada = j.optString("entrada"),
+                    salida = j.optString("salida"),
+                    descripcion = j.optString("descripcion"),
+                    ubicacion = j.optString("ubicacion"),
+                    correo = j.optString("correo"),
+                )
+            }) }
+        }
     }
 
     fun revisarActividad(actividad: ActividadPorRevisar, aprobar: Boolean) = guardarEnServidor {
@@ -318,10 +324,11 @@ class AdminViewModel(app: Application) : AndroidViewModel(app) {
     fun cargarRoles() = ejecutar { leerRoles() }
 
     private suspend fun leerRoles() {
-        val r = pedir("adminRoles")
-        val enUso = r.optJSONObject("enUso") ?: JSONObject()
-        val roles = lista(r.getJSONArray("roles"), Rol::deJson)
-        _estado.update { it.copy(roles = roles, rolesEnUso = roles.associate { rol -> rol.codigo to enUso.optInt(rol.codigo, 0) }) }
+        consultar("adminRoles") { r ->
+            val enUso = r.optJSONObject("enUso") ?: JSONObject()
+            val roles = lista(r.getJSONArray("roles"), Rol::deJson)
+            _estado.update { it.copy(roles = roles, rolesEnUso = roles.associate { rol -> rol.codigo to enUso.optInt(rol.codigo, 0) }) }
+        }
     }
 
     /** Crea (código vacío) o edita un rol: nombre, si marca asistencia y sus funciones. */
@@ -342,8 +349,9 @@ class AdminViewModel(app: Application) : AndroidViewModel(app) {
     fun cargarSolicitudes() = ejecutar { leerSolicitudes() }
 
     private suspend fun leerSolicitudes() {
-        val r = pedir("adminSolicitudes")
-        _estado.update { it.copy(solicitudes = lista(r.getJSONArray("solicitudes"), Solicitud::deJson)) }
+        consultar("adminSolicitudes") { r ->
+            _estado.update { it.copy(solicitudes = lista(r.getJSONArray("solicitudes"), Solicitud::deJson)) }
+        }
     }
 
     /** Aprobar agrega el permiso al calendario de la persona (lo hace el servidor). */
@@ -362,34 +370,36 @@ class AdminViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Reporte de un mes ("2026-11"): resumen por persona y detalle por día. */
     fun generarReporte(mes: String) = ejecutar {
-        val r = pedir("adminReporte", JSONObject().put("mes", mes))
-        val filas = lista(r.getJSONArray("resumen")) { FilaReporte.deJson(it, mes) }
-        val detalle = lista(r.getJSONArray("detalle")) { d ->
-            DiaReporte(
-                nombre = d.optString("nombre"),
-                fecha = d.optString("fecha"),
-                entrada = d.optString("entrada"),
-                salida = d.optString("salida"),
-                horas = d.optString("horas"),
-                estado = d.optString("estado"),
-                estadoDia = d.optString("estadoDia", d.optString("estado")),
-                minutosTarde = d.optString("minutosTarde"),
-                minutosAntes = d.optString("minutosAntes"),
-                extra = d.optString("extra"),
-                revision = d.optString("revision").takeIf { it != "No aplica" }.orEmpty(),
-                observacion = d.optString("observacion"),
-                permiso = d.optString("permiso"),
-            )
+        consultar("adminReporte", JSONObject().put("mes", mes)) { r ->
+            val filas = lista(r.getJSONArray("resumen")) { FilaReporte.deJson(it, mes) }
+            val detalle = lista(r.getJSONArray("detalle")) { d ->
+                DiaReporte(
+                    nombre = d.optString("nombre"),
+                    fecha = d.optString("fecha"),
+                    entrada = d.optString("entrada"),
+                    salida = d.optString("salida"),
+                    horas = d.optString("horas"),
+                    estado = d.optString("estado"),
+                    estadoDia = d.optString("estadoDia", d.optString("estado")),
+                    minutosTarde = d.optString("minutosTarde"),
+                    minutosAntes = d.optString("minutosAntes"),
+                    extra = d.optString("extra"),
+                    revision = d.optString("revision").takeIf { it != "No aplica" }.orEmpty(),
+                    observacion = d.optString("observacion"),
+                    permiso = d.optString("permiso"),
+                )
+            }
+            _estado.update { it.copy(reporte = ReporteMes(mes, filas, detalle)) }
         }
-        _estado.update { it.copy(reporte = ReporteMes(mes, filas, detalle)) }
     }
 
     /** Resumen de un año ("2026"): totales por persona y por mes. */
     fun cargarAnual(anio: String) = ejecutar {
-        val r = pedir("adminResumenAnual", JSONObject().put("anio", anio))
-        val meses = r.optJSONArray("meses")?.let { a -> (0 until a.length()).map { a.getString(it) } }.orEmpty()
-        val filas = lista(r.getJSONArray("filas")) { FilaReporte.deJson(it, "") }
-        _estado.update { it.copy(anual = ReporteAnual(r.optString("anio", anio), meses, filas)) }
+        consultar("adminResumenAnual", JSONObject().put("anio", anio)) { r ->
+            val meses = r.optJSONArray("meses")?.let { a -> (0 until a.length()).map { a.getString(it) } }.orEmpty()
+            val filas = lista(r.getJSONArray("filas")) { FilaReporte.deJson(it, "") }
+            _estado.update { it.copy(anual = ReporteAnual(r.optString("anio", anio), meses, filas)) }
+        }
     }
 
     // ---------- Ajustes: reglas y ubicación del colegio ----------
@@ -397,9 +407,10 @@ class AdminViewModel(app: Application) : AndroidViewModel(app) {
     fun cargarAjustes() = ejecutar { leerAjustes() }
 
     private suspend fun leerAjustes() {
-        val r = pedir("adminConfig")
-        _estado.update {
-            it.copy(config = AjustesColegio(r.optInt("horasMeta", 8), r.optInt("tolerancia", 0), lista(r.getJSONArray("sedes"), Sede::deJson)))
+        consultar("adminConfig") { r ->
+            _estado.update {
+                it.copy(config = AjustesColegio(r.optInt("horasMeta", 8), r.optInt("tolerancia", 0), lista(r.getJSONArray("sedes"), Sede::deJson)))
+            }
         }
     }
 
@@ -465,6 +476,21 @@ class AdminViewModel(app: Application) : AndroidViewModel(app) {
     fun mensajeMostrado(mensaje: Mensaje) = _estado.update { if (it.mensaje === mensaje) it.copy(mensaje = null) else it }
 
     private fun aviso(texto: String) = _estado.update { it.copy(mensaje = Mensaje(texto, error = false)) }
+
+    private val memoria get() = getApplication<Application>().getSharedPreferences("panel", android.content.Context.MODE_PRIVATE)
+
+    /**
+     * Consulta del panel: primero muestra al instante lo último que se vio (guardado en el teléfono) y después lo
+     * actualiza con el servidor. Así, al abrir el panel o cambiar de pestaña no se queda vacío esperando.
+     */
+    private suspend fun consultar(accion: String, datos: JSONObject = JSONObject(), aplicar: (JSONObject) -> Unit) {
+        val dia = if (accion == "adminHoy") java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date()) else ""
+        val clave = listOf(Sesion(getApplication()).correo, accion, datos.toString(), dia).joinToString("|")
+        memoria.getString(clave, null)?.let { guardado -> runCatching { aplicar(JSONObject(guardado)) } }
+        val r = pedir(accion, JSONObject(datos.toString()))
+        aplicar(r)
+        memoria.edit().putString(clave, r.toString()).apply()
+    }
 
     private suspend fun pedir(accion: String, datos: JSONObject = JSONObject()): JSONObject {
         val cuerpo = datosDelTelefono(getApplication())

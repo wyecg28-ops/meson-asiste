@@ -149,6 +149,9 @@ class Sesion(private val context: Context) {
         }
         escribirLista(cuentas.filter { it.correo != cuenta })
         Marcas(context, cuenta).borrarTodo()
+        // Lo que el panel de administración guardó de esta cuenta.
+        val panel = context.getSharedPreferences("panel", Context.MODE_PRIVATE)
+        panel.edit { panel.all.keys.filter { it.startsWith("$cuenta|") }.forEach { remove(it) } }
         if (correo == cuenta) correo = null
     }
 
