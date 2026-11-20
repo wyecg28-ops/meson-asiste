@@ -42,8 +42,9 @@ $version = [ordered]@{
 }
 [IO.File]::WriteAllText("$PSScriptRoot\web\version.json", ($version | ConvertTo-Json), (New-Object Text.UTF8Encoding($false)))
 
-git add web/version.json app/build.gradle.kts
-git commit -q -m "Publicar Mesón Asiste $nombre"
-git push -q origin HEAD
-git push -q origin HEAD:main
+# git escribe avisos en stderr; con cmd /c no detienen el guion.
+cmd /c "git add web/version.json app/build.gradle.kts 2>&1" | Out-Null
+cmd /c "git commit -q -m ""Publicar Mesón Asiste $nombre"" 2>&1" | Out-Null
+cmd /c "git push -q origin HEAD 2>&1" | Out-Null
+cmd /c "git push -q origin HEAD:main 2>&1" | Out-Null
 Write-Host "Listo: Mesón Asiste $nombre publicada. Las apps instaladas mostrarán el aviso en unos minutos."
