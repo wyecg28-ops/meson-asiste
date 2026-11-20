@@ -23,8 +23,8 @@ android {
         minSdk = 23
         targetSdk = 37
         // Subir los dos en cada versión publicada (la app avisa si hay una mayor).
-        versionCode = 2
-        versionName = "1.1"
+        versionCode = 3
+        versionName = "1.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
