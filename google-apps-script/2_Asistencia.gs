@@ -660,6 +660,23 @@ function sinAlmuerzo(minutos, miembro, fecha, eventos) {
   return minutos - Math.min(almuerzo, Math.max(0, minutos - desde));
 }
 
+/**
+ * Minutos trabajados de una fila de la hoja de una persona, calculados al momento con su jornada de ese día: entre la
+ * entrada y la salida, sin el permiso que cae en medio ni el almuerzo. null si aún no tiene salida.
+ * Se usa en lugar de la columna "Horas", que se guarda al marcar la salida y no cambia si después se pone el almuerzo.
+ */
+function minutosDeFila(m, v, eventos) {
+  const fecha = textoFecha(v[COL.FECHA - 1]);
+  const entrada = v[COL.ENTRADA - 1] ? textoHora(v[COL.ENTRADA - 1]).substring(0, 5) : '';
+  const salida = v[COL.SALIDA - 1] ? textoHora(v[COL.SALIDA - 1]).substring(0, 5) : '';
+  if (!entrada || !salida) return null;
+  const mf = conJornadaDeFila(m, v);
+  let bruto = aMinutos(salida) - aMinutos(entrada);
+  if (bruto < 0) bruto += 1440; // turno que pasa la medianoche
+  const permisos = permisosPorHoras(mf, fecha, eventos);
+  return sinAlmuerzo(Math.max(0, bruto - minutosPermisoDentro(permisos, entrada, salida)), mf, fecha, eventos);
+}
+
 /** Permisos por horas de un miembro en una fecha. */
 function permisosPorHoras(miembro, fecha, eventos) {
   return (eventos || leerEventos()).filter(e => e.tipo === 'PERMISO' && e.horaInicio && e.horaFin &&
@@ -944,7 +961,8 @@ function calcularDestacados() {
     let minutos = 0;
     filas.forEach(v => {
       const f = textoFecha(v[COL.FECHA - 1]);
-      if (f >= lunes && f <= hoy && v[COL.HORAS - 1]) minutos += aMinutos(String(v[COL.HORAS - 1]));
+      // Se calcula al momento (sin permiso ni almuerzo), no con lo que quedó guardado al marcar la salida.
+      if (f >= lunes && f <= hoy) minutos += minutosDeFila(m, v, eventos) || 0;
     });
     if (racha > 0 && (!mejorRacha || racha > mejorRacha.valor)) mejorRacha = { nombre: m.nombre, valor: racha };
     if (minutos > 0 && (!masHoras || minutos > masHoras.minutos)) masHoras = { nombre: m.nombre, minutos: minutos };

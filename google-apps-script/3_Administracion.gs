@@ -112,7 +112,9 @@ function adminHoy() {
       const v = hoja.getRange(fila, 1, 1, ENCABEZADOS_DOCENTE.length).getValues()[0];
       entrada = textoHora(v[COL.ENTRADA - 1]).substring(0, 5);
       salida = v[COL.SALIDA - 1] ? textoHora(v[COL.SALIDA - 1]).substring(0, 5) : '';
-      horas = String(v[COL.HORAS - 1] || '');
+      // Se calcula al momento (sin permiso ni almuerzo), no con lo que quedó guardado al marcar la salida.
+      const minutos = minutosDeFila(m, v, eventos);
+      horas = minutos === null ? '' : textoDuracion(minutos);
       actividad = v[COL.ACTIVIDAD - 1] === 'Sí';
       revision = String(v[COL.REVISION - 1] || '');
     }
@@ -237,6 +239,8 @@ function adminGuardarJornada(j) {
     hoja.appendRow(fila);
   }
   _jornadas = null;
+  // Cambió el almuerzo: unos segundos después se recalculan las horas guardadas en la hoja de cada persona.
+  if (anterior && (anterior.almuerzo || 0) !== almuerzo) programarRecalculoHoras();
   return { ok: true, mensaje: 'Jornada "' + nombre + '" guardada.' };
 }
 
@@ -756,6 +760,23 @@ function cambiaronDatos(accion) {
   } catch (e) {
     console.log('No se pudo programar la actualización de los reportes: ' + e.message);
   }
+}
+
+/** Recalcula en segundo plano (sin hacer esperar a nadie) las horas guardadas en la hoja de cada persona. */
+function programarRecalculoHoras() {
+  try {
+    if (ScriptApp.getProjectTriggers().some(t => t.getHandlerFunction() === 'recalculoProgramado')) return;
+    ScriptApp.newTrigger('recalculoProgramado').timeBased().after(20 * 1000).create();
+  } catch (e) {
+    console.log('No se pudo programar el recálculo de horas: ' + e.message);
+  }
+}
+
+/** Lo ejecuta Google unos segundos después de cambiar el almuerzo de una jornada. */
+function recalculoProgramado() {
+  ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === 'recalculoProgramado')
+    .forEach(t => ScriptApp.deleteTrigger(t));
+  recalcularHoras();
 }
 
 /** Lo ejecuta Google unos segundos después de un cambio hecho desde la app. */
