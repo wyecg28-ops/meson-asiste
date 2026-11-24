@@ -353,17 +353,18 @@ function duracionDelDia(clave) {
   return m <= 0 ? m + 1440 : m;
 }
 
-/** Minutos de almuerzo de ese día (0 si la jornada no tiene o el día es corto). */
+/** Minutos de almuerzo que se quitan a la meta de ese día (0 si la jornada no tiene o el horario es corto). */
 function almuerzoDelDia(clave) {
   const almuerzo = (perfil().jornada && perfil().jornada.almuerzo) || 0;
   return almuerzo && duracionDelDia(clave) > HORAS_ANTES_DEL_ALMUERZO * 60 ? almuerzo : 0;
 }
 
-/** Quita el almuerzo: se descuenta a medida que se pasa de 6 h en el colegio, hasta completarlo. */
+/** Quita el almuerzo según el tiempo que de verdad estuvo: se descuenta a medida que pasa de 6 h, hasta completarlo. */
 function sinAlmuerzo(minutos, clave) {
-  const almuerzo = almuerzoDelDia(clave);
+  const almuerzo = (perfil().jornada && perfil().jornada.almuerzo) || 0;
   if (!almuerzo) return minutos;
-  const desde = Math.min(HORAS_ANTES_DEL_ALMUERZO * 60, duracionDelDia(clave) - almuerzo);
+  const umbral = HORAS_ANTES_DEL_ALMUERZO * 60, horario = duracionDelDia(clave);
+  const desde = horario > umbral ? Math.min(umbral, horario - almuerzo) : umbral;
   return minutos - Math.min(almuerzo, Math.max(0, minutos - desde));
 }
 

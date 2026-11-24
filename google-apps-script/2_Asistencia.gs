@@ -655,8 +655,9 @@ function duracionDelDia(miembro, fecha, eventos) {
 }
 
 /**
- * Minutos de almuerzo de ese día: los de su jornada, solo si el horario del día dura más de
- * CONFIG.HORAS_ANTES_DEL_ALMUERZO horas (un sábado de 8:00 a 12:00 no lleva almuerzo). 0 = jornada continua.
+ * Minutos de almuerzo que se quitan a la META de ese día: los de su jornada, solo si el horario del día dura más de
+ * CONFIG.HORAS_ANTES_DEL_ALMUERZO horas (un sábado de 8:00 a 12:00 tiene meta de 4 h, sin almuerzo). Las horas
+ * trabajadas se calculan aparte (sinAlmuerzo), según el tiempo que de verdad estuvo la persona.
  */
 function almuerzoDelDia(miembro, fecha, eventos) {
   const almuerzo = jornadaJson(miembro.jornada).almuerzo || 0;
@@ -665,14 +666,18 @@ function almuerzoDelDia(miembro, fecha, eventos) {
 
 /**
  * Quita el almuerzo de los minutos que la persona estuvo en el colegio. Cada quien almuerza a distinta hora, así que
- * no se usa un horario fijo: se descuenta a medida que pasa de 6 horas en el colegio (o de lo que dure su jornada sin
- * el almuerzo, si es menos), hasta completar el almuerzo. Quien se va antes no tiene descuento, quedarse más nunca
- * resta, y la jornada completa da justo sus horas efectivas (7:00 a 16:00 con 1 h de almuerzo = 8 h).
+ * no se usa un horario fijo: se descuenta según el tiempo que de verdad estuvo, a medida que pasa de 6 horas en el
+ * colegio, hasta completar el almuerzo de su jornada. Quien se va antes (medio día) no tiene descuento, quedarse más
+ * nunca resta, y la jornada completa da justo sus horas efectivas (7:00 a 16:00 con 1 h de almuerzo = 8 h).
+ * Si su horario de ese día dura más de 6 h pero menos que 6 h + almuerzo, se empieza a descontar antes, para que el
+ * horario completo dé su duración sin el almuerzo.
  */
 function sinAlmuerzo(minutos, miembro, fecha, eventos) {
-  const almuerzo = almuerzoDelDia(miembro, fecha, eventos);
+  const almuerzo = jornadaJson(miembro.jornada).almuerzo || 0;
   if (!almuerzo) return minutos;
-  const desde = Math.min(CONFIG.HORAS_ANTES_DEL_ALMUERZO * 60, duracionDelDia(miembro, fecha, eventos) - almuerzo);
+  const umbral = CONFIG.HORAS_ANTES_DEL_ALMUERZO * 60;
+  const horario = duracionDelDia(miembro, fecha, eventos);
+  const desde = horario > umbral ? Math.min(umbral, horario - almuerzo) : umbral;
   return minutos - Math.min(almuerzo, Math.max(0, minutos - desde));
 }
 
@@ -1077,8 +1082,8 @@ function recalcularFila(hoja, f, m, eventos, sinNota) {
 }
 
 /**
- * Ejecutar desde el editor para entender por qué a alguien le salen 9 horas (o más): revisa los días de los últimos
- * 7 días con 9 horas o más (guardadas en la hoja o calculadas) y anota en el "Registro de ejecución" la causa.
+ * Ejecutar desde el editor para entender por qué a alguien le salen 9 horas (o más) o muchas horas extra: revisa los
+ * días de los últimos 7 días con 9 horas o más, o con 2 horas extra o más, y anota en el "Registro de ejecución" la causa.
  * Solo lee: no cambia nada.
  */
 function revisarHoras() {
@@ -1098,15 +1103,22 @@ function revisarHoras() {
       const fecha = textoFecha(v[COL.FECHA - 1]);
       const calculadas = minutosDeFila(m, v, eventos);
       const guardadas = v[COL.HORAS - 1] ? aMinutos(String(v[COL.HORAS - 1])) : null;
-      if (fecha < desde || calculadas === null || Math.max(calculadas, guardadas || 0) < 9 * 60) return;
-      casos++;
+      if (fecha < desde || calculadas === null) return;
       const mf = conJornadaDeFila(m, v);
+      const meta = metaDelDia(mf, fecha, eventos);
+      // Se revisan los días con 9 horas o más, o con 2 horas extra o más.
+      if (Math.max(calculadas, guardadas || 0) < 9 * 60 && calculadas - meta < 120) return;
+      casos++;
       const j = jornadaJson(mf.jornada);
       const entrada = textoHora(v[COL.ENTRADA - 1]).substring(0, 5), salida = textoHora(v[COL.SALIDA - 1]).substring(0, 5);
       const causas = [];
       if (!j.almuerzo) causas.push('su jornada "' + j.nombre + '" no tiene almuerzo puesto (Admin → Jornadas)');
-      else if (!almuerzoDelDia(mf, fecha, eventos)) causas.push('el horario de ese día dura 6 h o menos, así que no lleva almuerzo');
-      if (calculadas >= 9 * 60 && j.almuerzo && almuerzoDelDia(mf, fecha, eventos)) {
+      if (meta < leerConfig().horasMeta * 60) {
+        causas.push('su horario de ese día ("' + j.nombre + '") dura ' + textoDuracion(duracionDelDia(mf, fecha, eventos)) +
+          ', así que su meta es ' + textoDuracion(meta) + ' y lo demás cuenta como horas extra (' +
+          textoDuracion(Math.max(0, calculadas - meta)) + '); si en realidad trabaja el día completo, corrige su jornada en Admin → Jornadas o Miembros');
+      }
+      if (calculadas >= 9 * 60 && j.almuerzo) {
         causas.push('de verdad trabajó ' + textoDuracion(calculadas) + ': estuvo de ' + entrada + ' a ' + salida + ' y ya se le quitó el almuerzo');
       }
       if (guardadas !== null && guardadas !== calculadas) {

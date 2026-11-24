@@ -416,7 +416,7 @@ data class Perfil(
         } else horarioDelDia(dia).let { duracionHorario(it.entrada, it.salida) }
     }
 
-    /** Almuerzo de ese día: el de la jornada, solo en días de más de 6 horas (un sábado de 8:00 a 12:00 no lleva). */
+    /** Almuerzo que se quita a la META de ese día: el de la jornada, solo si el horario dura más de 6 horas. */
     fun almuerzoDelDia(dia: Long): Int =
         if (horario.almuerzo > 0 && duracionDelDia(dia) > HORAS_ANTES_DEL_ALMUERZO * 60) horario.almuerzo else 0
 
@@ -425,9 +425,12 @@ data class Perfil(
      * pasa de 6 h (o de lo que dure su jornada sin el almuerzo, si es menos) hasta completarlo. Igual que el servidor.
      */
     fun sinAlmuerzo(minutos: Long, dia: Long): Long {
-        val almuerzo = almuerzoDelDia(dia).toLong()
+        // Según el tiempo que de verdad estuvo (no según cómo esté guardado el horario): igual que el servidor.
+        val almuerzo = horario.almuerzo.toLong()
         if (almuerzo == 0L) return minutos
-        val desde = minOf(HORAS_ANTES_DEL_ALMUERZO * 60L, duracionDelDia(dia) - almuerzo)
+        val umbral = HORAS_ANTES_DEL_ALMUERZO * 60L
+        val duracion = duracionDelDia(dia).toLong()
+        val desde = if (duracion > umbral) minOf(umbral, duracion - almuerzo) else umbral
         return minutos - minOf(almuerzo, maxOf(0L, minutos - desde))
     }
 

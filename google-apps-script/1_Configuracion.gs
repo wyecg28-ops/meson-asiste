@@ -50,8 +50,8 @@ const CONFIG = {
   // Quien no está en ninguna lista entra como Docente.
   SUPERVISORES: [],
   // El almuerzo de cada jornada (Admin → Jornadas) no cuenta como trabajo. Como cada quien almuerza a distinta hora,
-  // se descuenta a quien pasa de estas horas en el colegio, y solo en días de más de estas horas (un sábado de
-  // 8:00 a 12:00 no lleva almuerzo). La app usa el mismo valor: si se cambia aquí, hay que cambiarlo también en ella.
+  // se descuenta a quien pasa de estas horas en el colegio (según el tiempo que de verdad estuvo). Quien trabaja medio
+  // día no tiene descuento. La app usa el mismo valor: si se cambia aquí, hay que cambiarlo también en ella.
   HORAS_ANTES_DEL_ALMUERZO: 6,
   // Se rechazan marcas guardadas en el teléfono hace más de estos días.
   DIAS_MAXIMOS_PENDIENTE: 3,
