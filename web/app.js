@@ -504,15 +504,100 @@ async function verificarIdentidad() {
 
 // ---------------------------------------------------------------- Ubicación y QR
 
-function ubicacionActual() {
+// ---------------------------------------------------------------- Ubicación (GPS)
+//
+// La primera lectura del teléfono (sobre todo en iPhone) suele ser aproximada: sale del Wi-Fi o de las antenas, con
+// 50 a 500 m de margen, y el GPS tarda un poco en afinar. Por eso:
+//  - Al abrir Inicio se empieza a buscar la ubicación en segundo plano (si ya hay permiso), para que al tocar
+//    "Marcar" ya esté lista.
+//  - Al marcar se espera hasta tener una lectura buena (dentro del colegio, o muy precisa) antes de enviarla.
+// Funciona igual sin internet: el GPS no lo necesita, y la marca se guarda con la lectura buena.
+
+const PRECISION_MAXIMA = 100;  // igual que el servidor: lecturas con más margen se rechazan
+const PRECISION_BUENA = 25;    // con esta precisión la lectura ya es confiable aunque esté fuera del colegio
+const ESPERA_GPS = 45000;      // máximo que se espera a que el GPS afine al marcar
+let ultimaLectura = null;      // { latitud, longitud, precision, hora } de la búsqueda en segundo plano
+let gpsSegundoPlano = null;
+
+const lecturaDe = p => ({ latitud: p.coords.latitude, longitud: p.coords.longitude, precision: p.coords.accuracy, hora: Date.now() });
+
+/** Sede más cercana a una lectura y distancia (m). */
+function sedeCercana(l) {
+  let mejor = null;
+  (perfil().sedes || []).forEach(s => {
+    const d = distanciaMetros(l.latitud, l.longitud, s.latitud, s.longitud);
+    if (!mejor || d < mejor.distancia) mejor = { sede: s, distancia: Math.round(d) };
+  });
+  return mejor;
+}
+
+/** ¿El servidor la aceptaría? Margen aceptable y dentro del radio de la sede más cercana (si hay sedes). */
+function dentroDelRango(l) {
+  const c = sedeCercana(l);
+  return l.precision <= PRECISION_MAXIMA && (!c || c.distancia <= c.sede.radio);
+}
+
+/** ¿Ya se puede dejar de esperar? Dentro del rango, o tan precisa que ya es confiable (aunque esté fuera). */
+function lecturaSirve(l, fuera) {
+  if (fuera) return l.precision <= PRECISION_MAXIMA; // actividad especial: no importa dónde
+  return dentroDelRango(l) || l.precision <= PRECISION_BUENA;
+}
+
+/** Empieza a buscar la ubicación en segundo plano (solo si ya hay permiso). Se detiene sola a los 3 minutos. */
+function calentarGps() {
+  if (gpsSegundoPlano || !navigator.geolocation || !navigator.permissions || !marcaAsistencia()) return;
+  navigator.permissions.query({ name: 'geolocation' }).then(p => {
+    if (p.state !== 'granted' || gpsSegundoPlano) return;
+    const id = navigator.geolocation.watchPosition(pos => {
+      const l = lecturaDe(pos);
+      if (!ultimaLectura || l.precision <= ultimaLectura.precision || Date.now() - ultimaLectura.hora > 20000) ultimaLectura = l;
+    }, () => {}, { enableHighAccuracy: true, maximumAge: 0 });
+    gpsSegundoPlano = id;
+    setTimeout(() => { navigator.geolocation.clearWatch(id); gpsSegundoPlano = null; }, 180000);
+  }).catch(() => {});
+}
+
+/** Muestra en el botón de marcar cómo va la búsqueda de la ubicación. */
+function mostrarBusquedaGps(l) {
+  const b = document.querySelector('[data-accion="marcar"]');
+  if (!b) return;
+  const c = l && sedeCercana(l);
+  b.innerHTML = 'Buscando tu ubicación…' + (l ? '<br><small style="font-size:.75rem">margen ±' + Math.round(l.precision) + ' m' +
+    (c ? ' · a ' + c.distancia + ' m de ' + esc(c.sede.nombre) : '') + '</small>' : '');
+}
+
+/**
+ * Ubicación para marcar: espera (hasta 45 s) a tener una lectura buena. Si se acaba el tiempo, devuelve la mejor que
+ * hubo. [fuera] = actividad especial (no importa estar en el colegio). [soloPrecisa] = esperar una lectura muy precisa
+ * (para guardar la ubicación del colegio).
+ */
+function ubicacionActual(fuera, soloPrecisa) {
+  const sirve = l => soloPrecisa ? l.precision <= PRECISION_BUENA : lecturaSirve(l, fuera);
   return new Promise((resolver, rechazar) => {
     if (!navigator.geolocation) return rechazar(new Error('Este navegador no permite usar la ubicación.'));
-    navigator.geolocation.getCurrentPosition(
-      p => resolver({ latitud: p.coords.latitude, longitud: p.coords.longitude, precision: p.coords.accuracy }),
-      e => rechazar(new Error(e.code === 1
-        ? 'Permite el acceso a la ubicación (Ajustes → Privacidad → Localización → Safari o Mesón Asiste).'
-        : 'No se pudo obtener tu ubicación. Activa el GPS e inténtalo en un lugar abierto.')),
-      { enableHighAccuracy: true, timeout: 25000, maximumAge: 0 });
+    // La búsqueda en segundo plano ya tiene una lectura reciente y buena: se usa sin esperar.
+    if (ultimaLectura && Date.now() - ultimaLectura.hora < 30000 && sirve(ultimaLectura)) return resolver(ultimaLectura);
+    let mejor = null, terminado = false, id = null;
+    const terminar = (error) => {
+      if (terminado) return;
+      terminado = true;
+      clearTimeout(limite);
+      if (id !== null) navigator.geolocation.clearWatch(id);
+      if (error) rechazar(error); else resolver(mejor);
+    };
+    const limite = setTimeout(() => terminar(mejor ? null
+      : new Error('No se pudo obtener tu ubicación. Activa el GPS (Localización) e inténtalo en un lugar abierto.')), ESPERA_GPS);
+    mostrarBusquedaGps(null);
+    id = navigator.geolocation.watchPosition(p => {
+      const l = lecturaDe(p);
+      if (!mejor || l.precision <= mejor.precision || sirve(l)) mejor = l;
+      ultimaLectura = l;
+      mostrarBusquedaGps(l);
+      if (sirve(l)) terminar(null);
+    }, e => {
+      if (e.code === 1) terminar(new Error('Permite el acceso a la ubicación (Ajustes → Privacidad → Localización → Safari o Mesón Asiste).'));
+      // Otros errores (sin señal por un momento): se sigue esperando hasta el límite.
+    }, { enableHighAccuracy: true, maximumAge: 0 });
   });
 }
 
@@ -678,7 +763,16 @@ const acciones = {
         throw new Error('Describe la actividad especial (por ejemplo: excursión al museo con 3.º básico).');
       }
       await verificarIdentidad();
-      const ubicacion = await ubicacionActual();
+      const ubicacion = await ubicacionActual(estado.actividad);
+      // Si después de esperar la lectura aún no sirve, se avisa aquí en vez de mandar una marca que se rechazaría
+      // (o que, sin internet, se rechazaría después). El GPS sigue afinando: al volver a tocar suele funcionar.
+      if (!estado.actividad && !dentroDelRango(ubicacion)) {
+        const c = sedeCercana(ubicacion);
+        throw new Error(ubicacion.precision > PRECISION_MAXIMA
+          ? 'Tu ubicación todavía no es precisa (margen ±' + Math.round(ubicacion.precision) + ' m). Sal a un lugar abierto, espera unos segundos y vuelve a tocar Marcar.'
+          : 'Tu ubicación indica que estás a ' + c.distancia + ' m de ' + c.sede.nombre + ' (margen ±' + Math.round(ubicacion.precision) +
+            ' m). Si estás dentro, espera unos segundos a que el GPS se ajuste y vuelve a tocar Marcar. Si estás en una actividad fuera del colegio, marca "Actividad especial".');
+      }
       // La sede más cercana decide si hay que escanear el QR de la entrada.
       const sedes = perfil().sedes || [];
       const sede = sedes.slice().sort((a, b2) =>
@@ -953,6 +1047,7 @@ function pantallaInicio() {
     return html + tarjetaRanking() + destacados() + tarjetaInstalar();
   }
 
+  calentarGps(); // la ubicación empieza a afinarse desde que se abre Inicio
   const aviso = diaLibre(hoy) || entradaEspecial(hoy) || eventosDel(hoy).find(porHoras);
   // Vacaciones y asuetos que le asignó la dirección: lo que está tomando y lo próximo.
   const proximas = p.diasLibres || [];

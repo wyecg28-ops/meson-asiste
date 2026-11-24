@@ -5,7 +5,7 @@
  * Guarda la app en el telÃ©fono para que abra rÃ¡pido y sin internet. Las llamadas al servidor no se guardan.
  * Al publicar cambios, sube el nÃºmero de VERSION para que los telÃ©fonos descarguen la nueva versiÃ³n.
  */
-const VERSION = 'meson-asiste-v9';
+const VERSION = 'meson-asiste-v10';
 const ARCHIVOS = [
   './', 'index.html', 'estilos.css', 'config.js', 'admin.js', 'app.js', 'vendor/jsQR.js', 'vendor/qrcode.js',
   'vendor/jspdf.umd.min.js', 'vendor/jspdf.plugin.autotable.min.js', 'manifest.webmanifest',

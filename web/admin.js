@@ -983,7 +983,7 @@ const accionesAdmin = {
         if (!p) throw new Error('No se reconocen las coordenadas. Ej.: 14.6349, -90.5069');
         [lat, lon] = p;
       } else if (origen === 'AQUI') {
-        const u = await ubicacionActual();
+        const u = await ubicacionActual(false, true);
         if (u.precision > 50) throw new Error('La señal GPS es imprecisa (±' + Math.round(u.precision) + ' m). Sal a un lugar abierto.');
         lat = u.latitud; lon = u.longitud;
       } else {

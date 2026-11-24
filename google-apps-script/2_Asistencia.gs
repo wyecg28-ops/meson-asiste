@@ -1061,6 +1061,54 @@ function recalcularFila(hoja, f, m, eventos, sinNota) {
 }
 
 /**
+ * Ejecutar desde el editor para entender por qué a alguien le salen 9 horas (o más): revisa los días de los últimos
+ * 7 días con 9 horas o más (guardadas en la hoja o calculadas) y anota en el "Registro de ejecución" la causa.
+ * Solo lee: no cambia nada.
+ */
+function revisarHoras() {
+  const libro = libroAsistencia();
+  const eventos = leerEventos();
+  const jornadas = leerJornadas();
+  const desde = fechaDesplazada(-7);
+  Logger.log('Jornadas: ' + Object.keys(jornadas).map(k => jornadas[k].nombre + ' ' + jornadas[k].entrada + '–' +
+    jornadas[k].salida + ' (almuerzo: ' + (jornadas[k].almuerzo ? jornadas[k].almuerzo + ' min' : 'NO TIENE') + ')').join(' · '));
+  if (leerConfig().contarDesde) Logger.log('Se cuenta desde el ' + fechaCorta(leerConfig().contarDesde) + '.');
+  let casos = 0;
+  leerMiembros().filter(m => marcaAsistencia(m.rol)).forEach(m => {
+    const hoja = m.hoja && libro.getSheetByName(m.hoja);
+    if (!hoja || hoja.getLastRow() < 2) return;
+    const n = Math.min(15, hoja.getLastRow() - 1);
+    hoja.getRange(hoja.getLastRow() - n + 1, 1, n, ENCABEZADOS_DOCENTE.length).getValues().forEach(v => {
+      const fecha = textoFecha(v[COL.FECHA - 1]);
+      const calculadas = minutosDeFila(m, v, eventos);
+      const guardadas = v[COL.HORAS - 1] ? aMinutos(String(v[COL.HORAS - 1])) : null;
+      if (fecha < desde || calculadas === null || Math.max(calculadas, guardadas || 0) < 9 * 60) return;
+      casos++;
+      const mf = conJornadaDeFila(m, v);
+      const j = jornadaJson(mf.jornada);
+      const entrada = textoHora(v[COL.ENTRADA - 1]).substring(0, 5), salida = textoHora(v[COL.SALIDA - 1]).substring(0, 5);
+      const causas = [];
+      if (!j.almuerzo) causas.push('su jornada "' + j.nombre + '" no tiene almuerzo puesto (Admin → Jornadas)');
+      else if (!almuerzoDelDia(mf, fecha, eventos)) causas.push('el horario de ese día dura 6 h o menos, así que no lleva almuerzo');
+      if (calculadas >= 9 * 60 && j.almuerzo && almuerzoDelDia(mf, fecha, eventos)) {
+        causas.push('de verdad trabajó ' + textoDuracion(calculadas) + ': estuvo de ' + entrada + ' a ' + salida + ' y ya se le quitó el almuerzo');
+      }
+      if (guardadas !== null && guardadas !== calculadas) {
+        causas.push('la hoja tiene guardado ' + textoDuracion(guardadas) + ' pero lo correcto es ' + textoDuracion(calculadas) +
+          ' (ejecuta recalcularHoras para corregir la hoja)');
+      }
+      if (String(v[COL.JORNADA - 1] || '').trim() && mf.jornada === m.jornada &&
+        String(v[COL.JORNADA - 1]).trim().toLowerCase() !== String(jornadaJson(m.jornada).nombre).toLowerCase()) {
+        causas.push('la fila dice jornada "' + v[COL.JORNADA - 1] + '", que ya no existe con ese nombre; se usó su jornada actual');
+      }
+      Logger.log(m.nombre + ' · ' + fechaCorta(fecha) + ' · ' + entrada + '–' + salida + ' → ' + textoDuracion(calculadas) +
+        ' calculadas. Causa: ' + (causas.join('; ') || 'revisar a mano'));
+    });
+  });
+  Logger.log(casos ? 'Días revisados con 9 horas o más: ' + casos + '.' : 'No hay días con 9 horas o más en los últimos 7 días.');
+}
+
+/**
  * Ejecutar desde el editor después de poner o cambiar el almuerzo de una jornada: vuelve a calcular las columnas
  * guardadas (Horas, Cumplió meta, Estado, Min tarde, Min antes y Horas extra) de las filas de todo el personal en la
  * hoja principal, con el almuerzo ya descontado. No borra nada: las entradas, salidas y observaciones se conservan.
