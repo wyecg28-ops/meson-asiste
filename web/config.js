@@ -11,5 +11,5 @@ const CONFIG = {
   DOMINIO: 'colegiomeson.edu.gt',
   // Autor. La licencia (LICENSE y NOTICE) exige conservar este crédito en toda copia o versión.
   CREADOR: '31YC0ND3',
-  VERSION: '1.0',
+  VERSION: '1.2',
 };

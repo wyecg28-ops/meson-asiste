@@ -24,7 +24,7 @@ android {
         targetSdk = 37
         // Subir los dos en cada versión publicada (la app avisa si hay una mayor).
         versionCode = 7
-        versionName = "1.6"
+        versionName = "1.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
