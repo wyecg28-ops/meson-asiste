@@ -29,8 +29,11 @@ if ($LASTEXITCODE -ne 0) { throw 'No se pudo compilar la app.' }
 $apk = Join-Path $env:TEMP "MesonAsiste-$nombre.apk"
 Copy-Item 'app\build\outputs\apk\release\app-release.apk' $apk -Force
 $sha = (Get-FileHash $apk -Algorithm SHA256).Hash.ToLower()
+# Copia con nombre fijo: el enlace .../releases/latest/download/MesonAsiste.apk siempre baja la última versión.
+$apkFijo = Join-Path $env:TEMP 'MesonAsiste.apk'
+Copy-Item $apk $apkFijo -Force
 
-gh release create $etiqueta $apk --title "Mesón Asiste $nombre" --notes $Notas
+gh release create $etiqueta $apk $apkFijo --title "Mesón Asiste $nombre" --notes $Notas
 if ($LASTEXITCODE -ne 0) { throw 'No se pudo crear la versión en GitHub.' }
 
 $version = [ordered]@{
