@@ -21,6 +21,8 @@ class MainActivity : FragmentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Cada respuesta del servidor pone en hora el reloj propio de la app.
+        com.example.asistencia.datos.SheetsApi.contexto = applicationContext
         enableEdgeToEdge()
         setContent {
             AsistenciaTheme {

@@ -20,6 +20,7 @@ import com.example.asistencia.datos.Marcas
 import com.example.asistencia.datos.Perfil
 import com.example.asistencia.datos.Periodo
 import com.example.asistencia.datos.Ranking
+import com.example.asistencia.datos.Reloj
 import com.example.asistencia.datos.ServidorException
 import com.example.asistencia.datos.SheetsApi
 import com.example.asistencia.datos.Sesion
@@ -352,10 +353,15 @@ class AsistenciaViewModel(app: Application) : AndroidViewModel(app) {
             MetodoVerificacion.UBICACION -> Unit
         }
 
+        // Hora del reloj propio de la app (no la del teléfono, que se puede cambiar): sirve también sin internet.
+        val horaTelefono = System.currentTimeMillis()
+        val (hora, origenHora) = Reloj.horaDeMarca(getApplication())
         val marca = Marca(
             id = UUID.randomUUID().toString(),
             tipo = tipo.name,
-            fechaHora = System.currentTimeMillis(),
+            fechaHora = hora,
+            origenHora = origenHora.name,
+            horaTelefono = horaTelefono,
             metodo = metodo?.etiqueta ?: "Sin biometría (el teléfono no tiene)",
             latitud = lectura.latitud,
             longitud = lectura.longitud,

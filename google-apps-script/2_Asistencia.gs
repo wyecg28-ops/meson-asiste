@@ -484,6 +484,9 @@ function registrar(usuario, d) {
   const jornada = jornadaJson(usuario.jornada);
   const eventos = leerEventos();
   let motivoRevision = '';
+  // Hora de la marca: la del reloj propio de la app (puesto en hora con el servidor o con los satélites GPS) es
+  // confiable aunque se marque sin internet y aunque se cambie la hora del teléfono. La del reloj del teléfono no.
+  const horaConfiable = d.origenHora === 'SERVIDOR' || d.origenHora === 'GPS';
 
   let hoja, filaHoy, actividadDelDia;
   let fechaFila = fecha; // día de la entrada (para un turno nocturno, la salida de madrugada es del día anterior)
@@ -518,6 +521,12 @@ function registrar(usuario, d) {
       throw new Error('Ya registraste tu salida hoy.');
     }
     if (sede && !fuera) motivoRevision = verificarPresencia(sede, d, tomada, ahora, minutosDeRetraso);
+    // Llegó tarde (sin internet) con la hora del teléfono: alguien pudo atrasar el reloj. La revisa el supervisor.
+    // (También las marcas de versiones anteriores de la app, que no tienen reloj propio.)
+    if (!horaConfiable && minutosDeRetraso > 10) {
+      motivoRevision = [motivoRevision, 'la hora no se pudo comprobar (se marcó sin internet con la hora del teléfono)']
+        .filter(String).join('; ');
+    }
   } catch (err) {
     // El super administrador no deja rastro en la hoja.
     if (!esSuperAdmin(usuario.rol)) {
@@ -533,6 +542,13 @@ function registrar(usuario, d) {
   if (motivoRevision) notas.push(ETIQUETAS[d.tipo] + ' por revisar: ' + motivoRevision);
   if (minutosDeRetraso > 10) notas.push(ETIQUETAS[d.tipo] + ' enviada sin conexión, llegó a las ' +
     Utilities.formatDate(ahora, CONFIG.ZONA_HORARIA, 'dd/MM HH:mm'));
+  // El reloj del teléfono no coincidía con la hora comprobada: se usó la comprobada y queda anotado.
+  const diferencia = isFinite(Number(d.horaTelefono)) && Number(d.horaTelefono) > 0
+    ? Math.round((Number(d.horaTelefono) - tomada.getTime()) / 60000) : 0;
+  if (horaConfiable && Math.abs(diferencia) >= 5) {
+    notas.push('El reloj del teléfono tenía ' + Math.abs(diferencia) + ' min ' + (diferencia < 0 ? 'de atraso' : 'de adelanto') +
+      ' (se usó la hora comprobada)');
+  }
   const permisos = permisosPorHoras(usuario, fechaFila, eventos);
 
   if (d.tipo === 'ENTRADA') {

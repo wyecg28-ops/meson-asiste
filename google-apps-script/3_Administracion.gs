@@ -1169,7 +1169,12 @@ function buscarFila(hoja, columna, valor) {
   return null;
 }
 
+/**
+ * Respuesta para la app. Siempre lleva la hora del servidor ("horaServidor", en milisegundos): con ella la app pone
+ * en hora su propio reloj, que no depende de la hora que la persona ponga en el teléfono.
+ */
 function json(obj) {
+  if (obj && typeof obj === 'object') obj.horaServidor = Date.now();
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
 }
 

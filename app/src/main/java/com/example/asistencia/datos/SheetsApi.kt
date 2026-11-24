@@ -4,6 +4,8 @@
  */
 package com.example.asistencia.datos
 
+import android.content.Context
+import android.os.SystemClock
 import com.example.asistencia.Config
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -33,15 +35,23 @@ object SheetsApi {
 
     val configurado get() = !Config.SCRIPT_URL.contains("REEMPLAZAR")
 
+    /** Para poner en hora el reloj propio con cada respuesta (lo fija MainActivity). */
+    @Volatile var contexto: Context? = null
+
     /** Envía una acción y devuelve la respuesta si fue exitosa. */
     suspend fun enviar(accion: String, datos: JSONObject): JSONObject = withContext(Dispatchers.IO) {
         if (!configurado) throw SinConexionException("El servidor todavía no está configurado (SCRIPT_URL en Config.kt).")
         datos.put("accion", accion)
+        val antes = SystemClock.elapsedRealtime()
         val respuesta = try {
             JSONObject(post(Config.SCRIPT_URL, datos.toString()))
         } catch (e: JSONException) {
             throw SinConexionException("El servidor respondió algo inesperado. Revisa la implementación del script.")
         }
+        // La hora del servidor corresponde, más o menos, a la mitad del viaje de ida y vuelta.
+        val servidor = respuesta.optLong("horaServidor", 0L)
+        val c = contexto
+        if (servidor > 0 && c != null) Reloj.sincronizar(c, servidor, (antes + SystemClock.elapsedRealtime()) / 2)
         if (!respuesta.optBoolean("ok")) {
             throw ServidorException(
                 respuesta.optString("mensaje", "Error desconocido del servidor."),

@@ -40,6 +40,10 @@ data class Marca(
     val wifi: List<String> = emptyList(),
     /** Si el servidor la dejó "Por revisar" (QR o Wi-Fi no comprobados), el motivo. */
     val revision: String = "",
+    /** De dónde salió [fechaHora]: reloj propio (SERVIDOR), satélites (GPS) o reloj del teléfono (TELEFONO). */
+    val origenHora: String = OrigenHora.TELEFONO.name,
+    /** Lo que marcaba el reloj del teléfono en ese momento (para notar si lo cambiaron). */
+    val horaTelefono: Long = 0L,
 ) {
     fun aJson(): JSONObject = JSONObject()
         .put("id", id)
@@ -56,6 +60,8 @@ data class Marca(
         .put("codigoQr", codigoQr)
         .put("wifi", JSONArray(wifi))
         .put("revision", revision)
+        .put("origenHora", origenHora)
+        .put("horaTelefono", horaTelefono)
 
     companion object {
         fun deJson(j: JSONObject) = Marca(
@@ -73,6 +79,8 @@ data class Marca(
             codigoQr = j.optString("codigoQr"),
             wifi = j.optJSONArray("wifi")?.let { a -> (0 until a.length()).map { a.getString(it) } } ?: emptyList(),
             revision = j.optString("revision"),
+            origenHora = j.optString("origenHora", OrigenHora.TELEFONO.name),
+            horaTelefono = j.optLong("horaTelefono", 0L),
         )
     }
 }

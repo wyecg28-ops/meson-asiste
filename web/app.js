@@ -125,6 +125,29 @@ class ErrorServidor extends Error {
 }
 class SinConexion extends Error {}
 
+// ---------------------------------------------------------------- Reloj propio
+//
+// La hora de una marca no se toma del reloj del teléfono (la persona lo puede atrasar), sino de la hora del servidor
+// recibida en la última conexión más lo que ha pasado desde entonces, medido con un contador interno del navegador.
+// En la web ese contador solo es confiable mientras la página sigue abierta y visible (si el teléfono se bloquea o se
+// cierra la app, se pausa); en ese caso la marca lleva la hora del teléfono y, si se envía sin internet, el servidor
+// la deja "Por revisar". Al volver a la app con internet se pone en hora sola.
+let relojServidor = 0, relojContador = 0;
+
+function ponerEnHora(servidor, contador) { relojServidor = servidor; relojContador = contador; }
+
+document.addEventListener('visibilitychange', () => {
+  // Con la página oculta el contador puede pausarse: el reloj deja de ser confiable hasta la próxima conexión.
+  if (document.visibilityState !== 'visible') relojServidor = 0;
+});
+
+/** Hora para una marca: { hora, origen } (SERVIDOR = comprobada; TELEFONO = la del teléfono). */
+function horaDeMarca() {
+  const transcurrido = performance.now() - relojContador;
+  if (relojServidor > 0 && transcurrido >= 0 && transcurrido < 12 * 3600000) return { hora: Math.round(relojServidor + transcurrido), origen: 'SERVIDOR' };
+  return { hora: Date.now(), origen: 'TELEFONO' };
+}
+
 async function api(accion, extra, correo) {
   const cuerpo = Object.assign({
     accion: accion,
@@ -133,6 +156,7 @@ async function api(accion, extra, correo) {
     modelo: modelo(),
   }, extra || {});
   let r;
+  const antes = performance.now();
   try {
     // text/plain evita la consulta previa (CORS) que Apps Script no responde.
     r = await fetch(CONFIG.SCRIPT_URL, { method: 'POST', body: JSON.stringify(cuerpo), headers: { 'Content-Type': 'text/plain;charset=utf-8' } });
@@ -142,6 +166,7 @@ async function api(accion, extra, correo) {
   if (!r.ok) throw new SinConexion('El servidor no respondió (' + r.status + ').');
   let j;
   try { j = await r.json(); } catch (e) { throw new SinConexion('Respuesta no válida del servidor.'); }
+  if (j.horaServidor > 0) ponerEnHora(j.horaServidor, (antes + performance.now()) / 2);
   if (j.ok === false) {
     const msg = j.mensaje === 'Acción no válida.'
       ? 'El servidor aún no está actualizado. Publica la nueva versión del servidor (Gestionar implementaciones → Nueva versión).'
@@ -783,8 +808,9 @@ const acciones = {
         codigoQr = await escanearQr();
         if (!codigoQr) throw new Error('Para marcar, escanea el código QR que se muestra en la entrada.');
       }
+      const reloj = horaDeMarca(); // hora comprobada (no la del reloj del teléfono, que se puede cambiar)
       const marca = {
-        id: uuid(), tipo: tipo, fechaHora: Date.now(),
+        id: uuid(), tipo: tipo, fechaHora: reloj.hora, origenHora: reloj.origen, horaTelefono: Date.now(),
         metodo: almacen.leer('credencial', null) ? 'Web + Face ID / huella' : 'Web',
         latitud: ubicacion.latitud, longitud: ubicacion.longitud, precision: ubicacion.precision,
         observacion: observacion, actividad: estado.actividad, codigoQr: codigoQr, wifi: [],
