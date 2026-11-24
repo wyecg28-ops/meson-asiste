@@ -768,6 +768,7 @@ function actualizarReportes() {
     try { Logger.log(cierreAnual().mensaje); } catch (e) { Logger.log('Cierre anual pendiente: ' + e.message); }
   }
   const resultado = refrescarPestanas();
+  try { const url = respaldoSemanal(false); if (url) Logger.log('Respaldo semanal: ' + url); } catch (e) { Logger.log('Respaldo semanal: ' + e.message); }
   // Ajusta el ancho de las columnas de todas las pestañas al contenido.
   libroAsistencia().getSheets().forEach(h => { try { ajustarColumnas(h); } catch (e) { /* pestaña sin datos */ } });
   return resultado;
@@ -855,6 +856,50 @@ function escribirReporte(def, filas, mes) {
     Utilities.formatDate(new Date(), CONFIG.ZONA_HORARIA, 'dd/MM/yyyy HH:mm') +
     '. Se actualiza sola cada hora; no escribas en esta pestaña.');
   ajustarColumnas(hoja);
+}
+
+// ---------------------------------------------------------------- Respaldo semanal
+
+/** Cuántas copias semanales se guardan (se van turnando: la más vieja se reemplaza). */
+const RESPALDOS_SEMANALES = 4;
+
+/**
+ * Copia completa de la hoja una vez por semana, de madrugada (lo llama la actualización de cada hora). Se guardan
+ * 4 copias en el Drive de quien publicó el servidor ("Mesón Asiste — Respaldo semanal 1…4"); cada semana se
+ * reemplaza la más vieja, así siempre están las últimas 4 semanas sin llenar el Drive. [forzar] = hacerlo ya.
+ * Devuelve el enlace de la copia, o null si aún no tocaba.
+ */
+function respaldoSemanal(forzar) {
+  const props = PropertiesService.getScriptProperties();
+  const ultimo = Number(props.getProperty('RESPALDO_ULTIMO') || 0);
+  const hora = Number(Utilities.formatDate(new Date(), CONFIG.ZONA_HORARIA, 'H'));
+  if (!forzar && (Date.now() - ultimo < 7 * 86400000 || hora >= 6)) return null;
+  const libro = libroAsistencia();
+  const turno = Number(props.getProperty('RESPALDO_TURNO') || 0) % RESPALDOS_SEMANALES;
+  const clave = 'RESPALDO_' + turno;
+  const nombre = 'Mesón Asiste — Respaldo semanal ' + (turno + 1) + ' (' + fechaCorta(fechaDesplazada(0)) + ')';
+  let destino = null;
+  try { if (props.getProperty(clave)) destino = SpreadsheetApp.openById(props.getProperty(clave)); } catch (e) { destino = null; }
+  if (!destino) {
+    destino = SpreadsheetApp.create(nombre);
+    props.setProperty(clave, destino.getId());
+  } else {
+    destino.rename(nombre);
+  }
+  // Se reemplaza todo su contenido por una copia de cada pestaña de la hoja principal.
+  const temporal = destino.insertSheet('temporal-' + Date.now());
+  destino.getSheets().filter(h => h.getSheetId() !== temporal.getSheetId()).forEach(h => destino.deleteSheet(h));
+  libro.getSheets().forEach(h => h.copyTo(destino).setName(h.getName()));
+  destino.deleteSheet(temporal);
+  destino.setSpreadsheetTimeZone(CONFIG.ZONA_HORARIA);
+  props.setProperty('RESPALDO_ULTIMO', String(Date.now()));
+  props.setProperty('RESPALDO_TURNO', String(turno + 1));
+  return destino.getUrl();
+}
+
+/** Ejecutar desde el editor para hacer un respaldo en este momento (además del automático de cada semana). */
+function hacerRespaldoAhora() {
+  Logger.log('Respaldo creado: ' + respaldoSemanal(true));
 }
 
 /** Ejecutar una vez desde el editor: actualiza los reportes cada hora (y lo hace ahora). */
