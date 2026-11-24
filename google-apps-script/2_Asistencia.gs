@@ -1137,6 +1137,45 @@ function revisarHoras() {
 }
 
 /**
+ * Pone la jornada actual de una persona en sus registros desde [desde] (yyyy-MM-dd) y los recalcula. Devuelve
+ * cuántos registros cambió. Se usa al cambiarle la jornada (desde hoy) y en aplicarJornadaActual.
+ */
+function aplicarJornadaDesde(m, desde, eventos) {
+  const hoja = m.hoja && libroAsistencia().getSheetByName(m.hoja);
+  if (!hoja || hoja.getLastRow() < 2) return 0;
+  const nombre = jornadaJson(m.jornada).nombre;
+  const n = Math.min(400, hoja.getLastRow() - 1);
+  const primera = hoja.getLastRow() - n + 1;
+  const valores = hoja.getRange(primera, 1, n, ENCABEZADOS_DOCENTE.length).getValues();
+  let cambiados = 0;
+  valores.forEach((v, i) => {
+    if (textoFecha(v[COL.FECHA - 1]) < desde || String(v[COL.JORNADA - 1]).trim() === nombre) return;
+    hoja.getRange(primera + i, COL.JORNADA).setValue(nombre);
+    recalcularFila(hoja, primera + i, m, eventos, true);
+    cambiados++;
+  });
+  return cambiados;
+}
+
+/**
+ * Ejecutar UNA vez desde el editor si se cambió la jornada de alguien después de que marcó: pone la jornada que cada
+ * persona tiene ahora en sus registros desde que se empezó a contar (CONTAR_DESDE; si no está, solo hoy) y los
+ * recalcula. No borra nada. Después se actualizan reportes, ranking y destacados.
+ */
+function aplicarJornadaActual() {
+  const desde = leerConfig().contarDesde || fechaDesplazada(0);
+  const eventos = leerEventos();
+  let total = 0;
+  leerMiembros().filter(m => marcaAsistencia(m.rol)).forEach(m => {
+    const n = aplicarJornadaDesde(m, desde, eventos);
+    if (n) Logger.log(m.nombre + ': ' + n + ' registro(s) ahora con "' + jornadaJson(m.jornada).nombre + '".');
+    total += n;
+  });
+  refrescarPestanas();
+  Logger.log('Listo: ' + total + ' registro(s) corregidos desde el ' + fechaCorta(desde) + '.');
+}
+
+/**
  * Ejecutar desde el editor después de poner o cambiar el almuerzo de una jornada: vuelve a calcular las columnas
  * guardadas (Horas, Cumplió meta, Estado, Min tarde, Min antes y Horas extra) de las filas de todo el personal en la
  * hoja principal, con el almuerzo ya descontado. No borra nada: las entradas, salidas y observaciones se conservan.

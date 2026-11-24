@@ -158,11 +158,21 @@ function adminAsignar(admin, d) {
     if (esRolFijo(m.correo)) throw new Error(m.correo + ' tiene un rol fijo (definido en CONFIG del script).');
     m.hoja.getRange(m.fila.numero, DOC.ROL + 1).setValue(d.rol);
   }
+  let deHoy = false;
   if (d.jornada) {
     if (!leerJornadas()[d.jornada]) throw new Error('Jornada no válida.');
+    const antes = miembroDe(m.fila.valores).jornada;
     m.hoja.getRange(m.fila.numero, DOC.JORNADA + 1).setValue(d.jornada);
+    // El cambio cuenta desde hoy: si ya marcó hoy, su registro de hoy pasa a la jornada nueva (los días anteriores
+    // se quedan con la que tenían).
+    if (antes !== d.jornada) {
+      const actualizado = m.fila.valores.slice();
+      actualizado[DOC.JORNADA] = d.jornada;
+      deHoy = aplicarJornadaDesde(miembroDe(actualizado), fechaDesplazada(0), leerEventos()) > 0;
+    }
   }
-  return { ok: true, mensaje: 'Cambios guardados para ' + m.fila.valores[DOC.NOMBRE] + '.' };
+  return { ok: true, mensaje: 'Cambios guardados para ' + m.fila.valores[DOC.NOMBRE] + '.' +
+    (deHoy ? ' Su registro de hoy ya usa la jornada nueva.' : '') };
 }
 
 /** Activa o desactiva a un miembro. Desactivado = no puede usar la app. */
