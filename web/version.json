@@ -1,7 +1,7 @@
 {
-    "versionCode":  4,
-    "versionName":  "1.3",
-    "apk":  "https://github.com/wyecg28-ops/meson-asiste/releases/download/v1.3/MesonAsiste-1.3.apk",
-    "sha256":  "eeb2c64b9c5ceee219bfd1ea646a6801e3afbb6d38b36ddd77d77a1240b2467c",
-    "notas":  "Carga más rápida: el panel de administración muestra al instante lo último que viste mientras se actualiza."
+    "versionCode":  5,
+    "versionName":  "1.4",
+    "apk":  "https://github.com/wyecg28-ops/meson-asiste/releases/download/v1.4/MesonAsiste-1.4.apk",
+    "sha256":  "32f96d113851caed968e2c3468fd1b267331190f546b596bb5997f0b2ef668e0",
+    "notas":  "Almuerzo fuera de las horas trabajadas, vacaciones y asuetos visibles en Permisos e Inicio, y novedades dentro de la app."
 }
