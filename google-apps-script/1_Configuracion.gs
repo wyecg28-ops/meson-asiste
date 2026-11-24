@@ -358,9 +358,12 @@ function leerConfig() {
   }
   const valores = {};
   hoja.getDataRange().getValues().slice(1).forEach(v => { if (v[0]) valores[String(v[0]).trim()] = v[1]; });
+  const desde = valores.CONTAR_DESDE ? textoFecha(valores.CONTAR_DESDE).replace(/^'/, '').substring(0, 10) : '';
   _config = {
     horasMeta: Number(valores.HORAS_META) > 0 ? Number(valores.HORAS_META) : CONFIG.HORAS_META,
     tolerancia: Number(valores.TOLERANCIA_MINUTOS) >= 0 ? Number(valores.TOLERANCIA_MINUTOS) : CONFIG.TOLERANCIA_MINUTOS,
+    // Los días anteriores a esta fecha no cuentan (ni horas ni faltas): se fija al limpiar las pruebas (empezarDesdeHoy).
+    contarDesde: /^\d{4}-\d{2}-\d{2}$/.test(desde) ? desde : '',
   };
   return _config;
 }

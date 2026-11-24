@@ -449,9 +449,11 @@ function evaluarMes(m, filas, mes, eventos, hoy) {
   const r = { correo: m.correo, nombre: m.nombre, rol: m.rolNombre, jornada: jornada.nombre, estado: ESTADOS[m.estado],
     dias: 0, puntuales: 0, tardes: 0, minutosTarde: 0, salidasAnticipadas: 0, faltas: 0, incompletos: 0,
     actividades: 0, libres: 0, minutos: 0, extra: 0, permiso: 0, porRevisar: 0 };
+    const contarDesde = leerConfig().contarDesde;
     for (let dia = 1; dia <= diasMes; dia++) {
       const fecha = mes + '-' + ('0' + dia).slice(-2);
       if (fecha > hoy) break;
+      if (contarDesde && fecha < contarDesde) continue; // antes de empezar a contar (días de prueba): no cuenta
       const v = filas[fecha];
       let meta = metaDelDia(m, fecha, eventos);
       if (v) {
@@ -651,10 +653,63 @@ function cierreAnual(anioForzado) {
     ' filas limpiadas de la hoja principal.' };
 }
 
-/** Borra las filas cuya fecha (columna [col], base 0) es igual o anterior a [fin]. Borra por bloques (rápido). */
-function borrarFilasHasta(hoja, col, fin) {
+/**
+ * Ejecutar UNA vez desde el editor para empezar a contar desde hoy (por ejemplo, después de días de prueba):
+ *  1. Hace una copia completa de la hoja en tu Drive ("Mesón Asiste — Respaldo antes de empezar el …").
+ *  2. Borra de la hoja principal todo lo anterior a hoy: marcas de cada persona, actividades especiales, rechazados,
+ *     solicitudes (y lo que su aprobación agregó al calendario) y bitácora.
+ *  3. Fija "CONTAR_DESDE" en Configuración: los días anteriores a hoy no cuentan como faltas ni suman horas.
+ * El personal, los roles, las jornadas, las sedes y el resto del calendario NO se tocan.
+ */
+function empezarDesdeHoy() {
+  const libro = libroAsistencia();
+  const hoy = fechaDesplazada(0);
+  const ayer = fechaDesplazada(-1);
+  const respaldo = libro.copy('Mesón Asiste — Respaldo antes de empezar el ' + fechaCorta(hoy));
+  Logger.log('1. Copia de respaldo creada: ' + respaldo.getUrl());
+
+  let filas = 0;
+  const detalle = [];
+  const contar = (nombre, n) => { filas += n; if (n) detalle.push(nombre + ': ' + n); };
+  // Marcas de cada persona.
+  obtenerHoja(DOCENTES.nombre, DOCENTES.encabezados).getDataRange().getValues().slice(1)
+    .map(v => String(v[DOC.HOJA] || '')).filter(String)
+    .forEach(n => contar(n, borrarFilasHasta(libro.getSheetByName(n), COL.FECHA - 1, ayer)));
+  contar(ACTIVIDADES.nombre, borrarFilasHasta(libro.getSheetByName(ACTIVIDADES.nombre), ACT.FECHA, ayer));
+  contar(RECHAZADOS.nombre, borrarFilasHasta(libro.getSheetByName(RECHAZADOS.nombre), 0, ayer));
+  // Solicitudes pedidas antes de hoy, y lo que su aprobación agregó al calendario.
+  const hojaSol = libro.getSheetByName(SOLICITUDES.nombre);
+  if (hojaSol && hojaSol.getLastRow() > 1) {
+    const eventosDePrueba = hojaSol.getRange(2, 1, hojaSol.getLastRow() - 1, SOLICITUDES.encabezados.length).getValues()
+      .filter(v => textoFecha(v[SOL.CREADA]).substring(0, 10) <= ayer && v[SOL.EVENTO]).map(v => String(v[SOL.EVENTO]).toLowerCase());
+    const cal = libro.getSheetByName(CALENDARIO.nombre);
+    let quitados = 0;
+    eventosDePrueba.forEach(id => {
+      const fila = cal && buscarFila(cal, CAL.ID, id);
+      if (fila) { cal.deleteRow(fila.numero); quitados++; }
+    });
+    contar('Calendario (de solicitudes de prueba)', quitados);
+  }
+  contar(SOLICITUDES.nombre, borrarFilasHasta(hojaSol, SOL.CREADA, ayer));
+  // Bitácora: la fecha está como "dd/MM/yyyy HH:mm:ss".
+  contar(BITACORA.nombre, borrarFilasHasta(libro.getSheetByName(BITACORA.nombre), 0, ayer,
+    v => { const m = String(v).match(/^(\d{2})\/(\d{2})\/(\d{4})/); return m ? m[3] + '-' + m[2] + '-' + m[1] : textoFecha(v); }));
+  Logger.log('2. Filas borradas: ' + filas + (detalle.length ? ' (' + detalle.join(', ') + ')' : ''));
+
+  guardarConfig('CONTAR_DESDE', "'" + hoy);
+  Logger.log('3. Desde el ' + fechaCorta(hoy) + ' se cuenta todo; los días anteriores no cuentan como faltas.');
+  CacheService.getScriptCache().removeAll(['destacados', 'ranking:' + hoy.substring(0, 7)]);
+  refrescarPestanas();
+  Logger.log('Listo. Reportes, ranking y destacados actualizados.');
+}
+
+/**
+ * Borra las filas cuya fecha (columna [col], base 0) es igual o anterior a [fin]. Borra por bloques (rápido).
+ * [aFecha] convierte la celda a "yyyy-MM-dd" (por defecto, textoFecha).
+ */
+function borrarFilasHasta(hoja, col, fin, aFecha) {
   if (!hoja || hoja.getLastRow() < 2) return 0;
-  const fechas = hoja.getRange(2, col + 1, hoja.getLastRow() - 1, 1).getValues().map(v => textoFecha(v[0]));
+  const fechas = hoja.getRange(2, col + 1, hoja.getLastRow() - 1, 1).getValues().map(v => (aFecha || textoFecha)(v[0]));
   let borradas = 0;
   let i = fechas.length - 1;
   while (i >= 0) {
