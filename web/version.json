@@ -1,7 +1,7 @@
 {
-    "versionCode":  6,
-    "versionName":  "1.5",
-    "apk":  "https://github.com/wyecg28-ops/meson-asiste/releases/download/v1.5/MesonAsiste-1.5.apk",
-    "sha256":  "a5a7132b0cb9081c3c9b58909294550f9651754d1db86a718b410d60e1893b16",
-    "notas":  "Reloj propio: la hora de las marcas ya no depende de la hora del teléfono. Mejor detección de la ubicación y avisos dentro de la app."
+    "versionCode":  7,
+    "versionName":  "1.2",
+    "apk":  "https://github.com/wyecg28-ops/meson-asiste/releases/download/v1.2/MesonAsiste-1.2.apk",
+    "sha256":  "fef8c5e504002874da25cc98f6c14b4918d472d7d2346dd046d3e4aeff213f51",
+    "notas":  "Primera versión oficial de Mesón Asiste: marcaje con ubicación, reloj propio que no depende de la hora del teléfono, almuerzo fuera de las horas trabajadas, vacaciones y asuetos visibles, novedades dentro de la app y actualizaciones automáticas."
 }
