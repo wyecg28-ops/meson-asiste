@@ -122,6 +122,8 @@ fun SeccionSolicitudes(estado: EstadoAdmin, vm: AdminViewModel, miCorreo: String
     if (pendientes.isEmpty()) EstadoVacio("Nada pendiente", "Las solicitudes de permiso del personal aparecerán aquí.")
     pendientes.forEach { s ->
         TarjetaSolicitud(s, mostrarNombre = true) {
+            // Vacaciones: cuántos días laborales son y si ya tiene vacaciones en esas fechas, antes de aprobar.
+            s.vista?.let { VistaVacacionesTexto(it, conNombre = false) }
             if (esMia(s)) {
                 Text(
                     "Es tu solicitud: debe revisarla otro supervisor o el administrador.",

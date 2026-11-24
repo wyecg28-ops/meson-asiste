@@ -11,6 +11,7 @@ import com.example.asistencia.datos.Evento
 import com.example.asistencia.datos.Horario
 import com.example.asistencia.datos.Rol
 import com.example.asistencia.datos.Sede
+import com.example.asistencia.datos.VistaVacaciones
 import com.example.asistencia.datos.Sesion
 import com.example.asistencia.datos.Solicitud
 import com.example.asistencia.ubicacion.Ubicacion
@@ -286,6 +287,20 @@ class AdminViewModel(app: Application) : AndroidViewModel(app) {
         val r = pedir("adminAgregarEvento", JSONObject().put("evento", evento.aJson()))
         aviso(r.optString("mensaje"))
         leerEventos()
+    }
+
+    /**
+     * Antes de dar vacaciones: cuántos días laborales son y si ya tiene vacaciones, para cada persona ([aplicaA] = "Todos" o
+     * correos separados por comas). Lista vacía si el servidor aún no tiene esta función o no hay conexión.
+     */
+    suspend fun vistaVacaciones(aplicaA: String, desde: String, hasta: String): List<VistaVacaciones> = try {
+        val r = pedir("adminVistaVacaciones", JSONObject().put("aplicaA", aplicaA).put("desde", desde).put("hasta", hasta))
+        val a = r.optJSONArray("vistas") ?: JSONArray()
+        (0 until a.length()).mapNotNull { VistaVacaciones.deJson(a.optJSONObject(it)) }
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        emptyList()
     }
 
     fun eliminarEvento(evento: Evento) = guardarEnServidor {

@@ -26,6 +26,8 @@ data class Solicitud(
     val creada: String = "",
     val revisadaPor: String = "",
     val revisadaEl: String = "",
+    /** Solo en vacaciones pendientes (panel): cuántos días laborales son y si ya tiene vacaciones en esas fechas. */
+    val vista: VistaVacaciones? = null,
 ) {
     val pendiente get() = estado == "PENDIENTE"
     val porHoras get() = horaInicio.isNotBlank() && horaFin.isNotBlank()
@@ -62,6 +64,7 @@ data class Solicitud(
             creada = j.optString("creada"),
             revisadaPor = j.optString("revisadaPor"),
             revisadaEl = j.optString("revisadaEl"),
+            vista = VistaVacaciones.deJson(j.optJSONObject("vista")),
         )
     }
 }

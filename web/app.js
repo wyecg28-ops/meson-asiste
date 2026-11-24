@@ -314,6 +314,37 @@ function trabaja(clave) {
   return dias.indexOf(diaIso(fechaDeClave(clave))) >= 0 || !!entradaEspecial(clave);
 }
 
+// ---------------------------------------------------------------- Almuerzo (igual que en el servidor)
+
+/** El almuerzo se descuenta a quien pasa de estas horas en el colegio, en días de más de estas horas. */
+const HORAS_ANTES_DEL_ALMUERZO = 6;
+
+/** Minutos que dura el horario del día (el especial con salida, o el de la jornada). */
+function duracionDelDia(clave) {
+  const especial = entradaEspecial(clave);
+  const e = especial && especial.horaSalida ? especial.horaEntrada : horarioDelDia(clave).entrada;
+  const s = especial && especial.horaSalida ? especial.horaSalida : horarioDelDia(clave).salida;
+  const m = aMinutos(s) - aMinutos(e);
+  return m <= 0 ? m + 1440 : m;
+}
+
+/** Minutos de almuerzo de ese día (0 si la jornada no tiene o el día es corto). */
+function almuerzoDelDia(clave) {
+  const almuerzo = (perfil().jornada && perfil().jornada.almuerzo) || 0;
+  return almuerzo && duracionDelDia(clave) > HORAS_ANTES_DEL_ALMUERZO * 60 ? almuerzo : 0;
+}
+
+/** Quita el almuerzo: se descuenta a medida que se pasa de 6 h en el colegio, hasta completarlo. */
+function sinAlmuerzo(minutos, clave) {
+  const almuerzo = almuerzoDelDia(clave);
+  if (!almuerzo) return minutos;
+  const desde = Math.min(HORAS_ANTES_DEL_ALMUERZO * 60, duracionDelDia(clave) - almuerzo);
+  return minutos - Math.min(almuerzo, Math.max(0, minutos - desde));
+}
+
+/** Meta del día: la del colegio, o lo que dure su horario sin el almuerzo si es menos. */
+const metaDelDia = clave => Math.min(meta(), duracionDelDia(clave) - almuerzoDelDia(clave));
+
 // ---------------------------------------------------------------- Turnos (historial + marcas pendientes)
 
 /** Historial del servidor más las marcas pendientes, el más reciente primero. */
@@ -323,11 +354,16 @@ function turnos() {
     const f = new Date(m.fechaHora);
     if (m.tipo === 'ENTRADA') {
       if (!lista.some(t => t.fecha === claveDia(f))) {
-        lista.push({ fecha: claveDia(f), entrada: hhmm(f), salida: '', pendiente: true, actividad: m.actividad, puntual: null, meta: meta() });
+        lista.push({ fecha: claveDia(f), entrada: hhmm(f), salida: '', pendiente: true, actividad: m.actividad, puntual: null, meta: metaDelDia(claveDia(f)) });
       }
     } else {
       const abierto = lista.filter(t => !t.salida).sort((a, b) => inicioTurno(b) - inicioTurno(a))[0];
-      if (abierto) { abierto.salida = hhmm(f); abierto.pendiente = true; abierto.minutos = Math.round((m.fechaHora - inicioTurno(abierto)) / 60000); }
+      if (abierto) {
+        abierto.salida = hhmm(f);
+        abierto.pendiente = true;
+        const bruto = Math.round((m.fechaHora - inicioTurno(abierto)) / 60000);
+        abierto.minutos = sinAlmuerzo(Math.max(0, bruto - permisoDentro(abierto, aMinutos(abierto.entrada) + bruto)), abierto.fecha);
+      }
     }
   });
   return lista.sort((a, b) => inicioTurno(b) - inicioTurno(a));
@@ -367,20 +403,21 @@ function permisoDentro(t, fin) {
   }, 0);
 }
 
+/** Minutos trabajados: sin el permiso que cae en medio ni el almuerzo. */
 function minutosTrabajados(t, ahora) {
   if (!t || !t.entrada) return 0;
   if (t.salida) {
-    if (t.minutos != null) return t.minutos; // ya calculado por el servidor (sin el permiso)
+    if (t.minutos != null) return t.minutos; // ya calculado por el servidor (sin el permiso ni el almuerzo)
     const bruto = (aMinutos(t.salida) - aMinutos(t.entrada) + 1440) % 1440;
-    return Math.max(0, bruto - permisoDentro(t, aMinutos(t.entrada) + bruto));
+    return sinAlmuerzo(Math.max(0, bruto - permisoDentro(t, aMinutos(t.entrada) + bruto)), t.fecha);
   }
   if (!turnoAbierto(t, ahora)) return 0;
   const bruto = Math.round((ahora - inicioTurno(t)) / 60000);
-  return Math.max(0, bruto - permisoDentro(t, aMinutos(t.entrada) + bruto));
+  return sinAlmuerzo(Math.max(0, bruto - permisoDentro(t, aMinutos(t.entrada) + bruto)), t.fecha);
 }
 
 /** Cumplió la meta: lo trabajado más las horas de permiso. */
-const cumpleMeta = t => minutosTrabajados(t, Date.now()) + minutosPermisoDe(t) >= (t.meta || meta());
+const cumpleMeta = t => minutosTrabajados(t, Date.now()) + minutosPermisoDe(t) >= (t.meta || metaDelDia(t.fecha));
 
 // ---------------------------------------------------------------- Estadísticas
 
@@ -572,6 +609,18 @@ async function iniciarSesionCon(correo, clave) {
 }
 
 const acciones = {
+  leerNovedad(b) {
+    const buzon = leerBuzon();
+    buzon.items = buzon.items.filter(x => x.id !== b.dataset.valor);
+    almacen.guardar(claveBuzon(), buzon);
+    render();
+  },
+  leerNovedades() {
+    const buzon = leerBuzon();
+    buzon.items = [];
+    almacen.guardar(claveBuzon(), buzon);
+    render();
+  },
   modoIniciar() { estado.modoAcceso = 'iniciar'; render(); },
   modoCrear() { estado.modoAcceso = 'crear'; render(); },
 
@@ -898,26 +947,38 @@ function pantallaInicio() {
 
   html += '<div class="tarjeta reloj"><div class="hora" id="reloj-hora"></div><p class="chico" id="reloj-fecha"></p>' +
     (p.jornada ? '<p><span class="etiqueta" style="color:var(--granate)">' + esc(p.jornada.nombre) + ' · ' + esc(textoHorario(ent, sal)) + '</span></p>' : '') +
-    '</div>';
+    '</div>' + tarjetaNovedades();
 
   if (!marcaAsistencia()) {
     return html + tarjetaRanking() + destacados() + tarjetaInstalar();
   }
 
   const aviso = diaLibre(hoy) || entradaEspecial(hoy) || eventosDel(hoy).find(porHoras);
+  // Vacaciones y asuetos que le asignó la dirección: lo que está tomando y lo próximo.
+  const proximas = p.diasLibres || [];
+  const actuales = proximas.find(v => v.tipo === 'VACACIONES' && v.desde <= hoy && hoy <= v.hasta);
   if (aviso) {
     html += '<div class="tarjeta"><h3 style="color:var(--granate)">' + esc(porHoras(aviso) ? 'Permiso por horas' : nombreTipo(aviso.tipo)) + '</h3><p>' +
       esc(porHoras(aviso) ? 'Tienes permiso de ' + horaAmigable(aviso.horaInicio) + ' a ' + horaAmigable(aviso.horaFin) + '; esas horas cuentan para tu meta. ' + (aviso.detalle || '')
         : aviso.tipo === 'ENTRADA_ESPECIAL' ? 'Hoy la entrada es a las ' + horaAmigable(aviso.horaEntrada) +
           (aviso.horaSalida ? ' y la salida a las ' + horaAmigable(aviso.horaSalida) : '') + '. ' + (aviso.detalle || '')
+        : aviso.tipo === 'VACACIONES' && actuales ? 'Estás de vacaciones hasta el ' + fechaLegible(actuales.hasta).toLowerCase() +
+          '. Hoy no se espera que marques. ¡Que descanses!'
         : 'Hoy no se espera que marques. ' + (aviso.detalle || '')) + '</p></div>';
+  }
+  const enUnMes = claveDia(new Date(ahora + 30 * 86400000));
+  const proxima = proximas.find(v => v.desde > hoy && v.desde <= enUnMes);
+  if (proxima) {
+    html += '<div class="tarjeta"><h3 style="color:var(--granate)">🌴 ' + (proxima.tipo === 'VACACIONES' ? 'Próximas vacaciones' : 'Próximo asueto') + '</h3><p>' +
+      esc(textoRango(proxima.desde, proxima.hasta)) + ' · ' + textoDiasLaborales(proxima.dias) + '</p>' +
+      '<button class="boton texto" style="align-self:flex-start" data-accion="pestana" data-valor="permisos">Ver todos</button></div>';
   }
 
   const t = turnoActual(ahora);
   const abierto = t && turnoAbierto(t, ahora);
   const siguiente = abierto ? 'SALIDA' : (t && t.fecha === hoy && t.salida ? null : 'ENTRADA');
   const trabajado = minutosTrabajados(t, ahora);
-  const metaDia = (t && t.meta) || meta();
+  const metaDia = (t && t.meta) || metaDelDia(hoy);
   const deAyer = t && t.fecha !== hoy;
 
   html += '<div class="tarjeta"><div class="fila"><h2 class="crece">' + (deAyer ? 'Turno de ayer (nocturno)' : 'Hoy') + '</h2>' +
@@ -1022,8 +1083,9 @@ function historial() {
       '<div class="rejilla-3">' + dato('Entrada', horaAmigable(t.entrada)) +
       dato('Salida', t.salida ? horaAmigable(t.salida) + (terminaDiaSiguiente(t.entrada, t.salida) ? ' (+1)' : '') : '--:--') +
       dato('Horas', t.salida || turnoAbierto(t, ahora) ? duracion(min) : '—') + '</div>' +
-      (cumplio === false && !t.actividad ? '<p class="chico alerta">No completó la meta de ' + duracion(t.meta || meta()) + '.</p>' : '') +
+      (cumplio === false && !t.actividad ? '<p class="chico alerta">No completó la meta de ' + duracion(t.meta || metaDelDia(t.fecha)) + '.</p>' : '') +
       (t.extra > 0 ? '<p class="chico exito">Horas extra: ' + duracion(t.extra) + '</p>' : '') +
+      (t.almuerzo > 0 ? '<p class="chico">Almuerzo descontado: ' + duracion(t.almuerzo) + '</p>' : '') +
       (t.revision ? '<p class="chico">Revisión: ' + esc(t.revision) + '</p>' : '') +
       (t.pendiente ? '<p class="chico alerta">📶 Pendiente de enviar</p>' : '') + '</div>';
   }).join('');
@@ -1033,7 +1095,7 @@ function pantallaPermisos() {
   if (estado.solicitudes === null) { cargarSolicitudes(); return '<h1>Permisos</h1><p class="cargando">Cargando…</p>'; }
   const etiquetas = { PENDIENTE: ['Pendiente', 'alerta'], APROBADA: ['Aprobada', 'exito'], RECHAZADA: ['Rechazada', 'error'], CANCELADA: ['Cancelada', 'chico'] };
   let html = '<h1>Permisos</h1><p class="chico">Pide un permiso o vacaciones. Cuando la dirección lo apruebe, se agrega a tu calendario.</p>' +
-    '<button class="boton" data-accion="nuevaSolicitud">+ Nueva solicitud</button>';
+    tarjetaVacaciones() + '<button class="boton" data-accion="nuevaSolicitud">+ Nueva solicitud</button>';
   if (!estado.solicitudes.length) html += '<div class="tarjeta centro"><h3>Sin solicitudes</h3><p class="chico">Aquí verás el estado de tus solicitudes.</p></div>';
   estado.solicitudes.forEach(s => {
     const e = etiquetas[s.estado] || etiquetas.PENDIENTE;
@@ -1048,6 +1110,149 @@ function pantallaPermisos() {
       '</div>';
   });
   return html;
+}
+
+const textoRango = (desde, hasta) => desde === hasta ? fechaLegible(desde) : fechaLegible(desde) + ' al ' + fechaLegible(hasta).toLowerCase();
+const textoDiasLaborales = n => n + (n === 1 ? ' día laboral' : ' días laborales');
+
+/**
+ * Mis vacaciones y asuetos: los que la dirección me asignó (pedidos o puestos directamente en el calendario) y que
+ * aún no terminan, con cuántos días laborales son. La app no calcula cuántos días le corresponden a nadie.
+ */
+function tarjetaVacaciones() {
+  const lista = perfil().diasLibres;
+  if (!lista) return '';
+  const hoy = claveDia(new Date());
+  let html = '<div class="tarjeta"><h3 style="color:var(--granate)">🌴 Mis vacaciones y asuetos</h3>';
+  lista.forEach(d => {
+    const ahora = d.desde <= hoy;
+    html += '<p>' + (ahora ? '🟢 ' : '📅 ') + '<b>' + (d.tipo === 'VACACIONES' ? 'Vacaciones' : 'Asueto') + ':</b> ' +
+      esc(textoRango(d.desde, d.hasta)) + ' · ' + textoDiasLaborales(d.dias) + (d.detalle ? ' <span class="chico">(' + esc(d.detalle) + ')</span>' : '') + '</p>';
+  });
+  if (!lista.length) html += '<p class="chico">No tienes vacaciones ni asuetos próximos.</p>';
+  return html + '<p class="chico">Las fechas las asigna la dirección.</p></div>';
+}
+
+// ---------------------------------------------------------------- Novedades (avisos dentro de la app)
+//
+// En el iPhone la web no puede mandar notificaciones al teléfono, así que los mismos avisos de la app Android se
+// muestran dentro de la app, en la tarjeta "Novedades" de Inicio:
+//  - Se quedan hasta tocar "Entendido": vacaciones o asuetos nuevos, logro de racha y resumen de la semana.
+//  - Aparecen solos mientras sirven: entrada en 15 minutos, entrada sin marcar y salida en 10 minutos.
+// Se guardan en este dispositivo (por cuenta).
+
+const esHitoRacha = n => [3, 5, 7, 10, 15, 20].indexOf(n) >= 0 || (n >= 30 && n % 10 === 0);
+const claveBuzon = () => 'novedades.' + ((estado.cuenta && estado.cuenta.correo) || '');
+const leerBuzon = () => almacen.leer(claveBuzon(), null) || { items: [], conocidos: null };
+
+/** Busca novedades nuevas y las guarda en el buzón de este dispositivo. */
+function actualizarNovedades() {
+  if (!estado.cuenta || !estado.perfil || !marcaAsistencia()) return;
+  const b = leerBuzon();
+  const antes = JSON.stringify(b);
+  const agregar = (id, icono, titulo, texto) => {
+    if (!b.items.some(x => x.id === id)) b.items.unshift({ id: id, icono: icono, titulo: titulo, texto: texto });
+  };
+  const ahora = new Date();
+  const e = estadisticas('semana');
+  // La primera vez solo se anota lo que ya existe, para no avisar de todo lo anterior.
+  if (!b.conocidos) b.conocidos = { libres: null, racha: e.racha, semana: '' };
+
+  // Vacaciones y asuetos que asignó la dirección.
+  const libres = perfil().diasLibres;
+  if (libres) {
+    if (b.conocidos.libres) {
+      libres.filter(d => b.conocidos.libres.indexOf(d.id) < 0).forEach(d => agregar('libre-' + d.id, '🌴',
+        d.tipo === 'VACACIONES' ? 'Tienes vacaciones' : 'Tienes un asueto',
+        textoRango(d.desde, d.hasta) + ' · ' + textoDiasLaborales(d.dias) + (d.detalle ? ' (' + d.detalle + ')' : '') + '.'));
+    }
+    b.conocidos.libres = Array.from(new Set((b.conocidos.libres || []).concat(libres.map(d => d.id)))).slice(-200);
+  }
+
+  // Logro de racha: 3, 5, 7, 10, 15, 20, 30… llegadas puntuales seguidas.
+  if (e.racha !== b.conocidos.racha) {
+    if (esHitoRacha(e.racha) && e.racha > (b.conocidos.racha || 0)) {
+      const mejor = perfil().destacados && perfil().destacados.mejorRacha;
+      agregar('racha-' + e.racha + '-' + claveDia(ahora), '🔥', '¡Racha de ' + e.racha + ' llegadas puntuales!', 'Sigue así, cada día puntual suma.' +
+        (mejor && e.racha >= mejor.valor ? ' ¡Ya alcanzas la mejor racha de la semana!'
+          : mejor ? ' La mejor racha de la semana es de ' + mejor.valor + ' (' + mejor.nombre + ').' : ''));
+    }
+    b.conocidos.racha = e.racha;
+  }
+
+  // Resumen de la semana: al terminar el último día laboral (media hora después de la salida) o en el fin de semana.
+  const lunes = claveDia(lunesDe(ahora));
+  const dias = (perfil().jornada && perfil().jornada.dias) || [1, 2, 3, 4, 5];
+  const ultimo = Math.max.apply(null, dias);
+  const hoy = claveDia(ahora);
+  const minuto = ahora.getHours() * 60 + ahora.getMinutes();
+  const terminoSemana = diaIso(ahora) > ultimo ||
+    (diaIso(ahora) === ultimo && !terminaDiaSiguiente(horaEntrada(hoy), horaSalida(hoy)) && minuto >= aMinutos(horaSalida(hoy)) + 30);
+  if (terminoSemana && b.conocidos.semana !== lunes) {
+    if (e.dias) {
+      agregar('semana-' + lunes, '📊', e.tardes === 0 && e.incompletos === 0 ? '¡Felicidades! Semana perfecta'
+        : (e.puntualidad == null ? 100 : e.puntualidad) >= 80 ? '¡Buena semana!' : 'Tu semana en resumen',
+        e.dias + ' días · ' + e.puntuales + ' puntuales · ' + e.tardes + ' tarde · ' + e.metaCumplida + ' con la meta cumplida · ' +
+        duracion(e.minutos) + ' en total' + (e.extra > 0 ? ' · ' + duracion(e.extra) + ' extra' : '') + '.');
+    }
+    b.conocidos.semana = lunes;
+  }
+
+  b.items = b.items.slice(0, 20);
+  if (JSON.stringify(b) !== antes) almacen.guardar(claveBuzon(), b);
+}
+
+/** Recordatorios de este momento (como los de Android): entrada en 15 minutos, entrada sin marcar, salida en 10 minutos. */
+function recordatoriosAhora() {
+  if (!estado.perfil || !marcaAsistencia()) return [];
+  const ahora = Date.now();
+  const hoy = claveDia(new Date(ahora));
+  const minuto = new Date(ahora).getHours() * 60 + new Date(ahora).getMinutes();
+  const lista = [];
+  const t = turnoActual(ahora);
+  const abierto = t && turnoAbierto(t, ahora);
+  const ent = aMinutos(horaEntrada(hoy));
+  let sal = aMinutos(horaSalida(hoy));
+  if (sal <= ent) sal += 1440;
+  const tolerancia = perfil().tolerancia || 0;
+  if (trabaja(hoy) && !diaLibre(hoy) && !abierto && !(t && t.fecha === hoy)) {
+    const especial = entradaEspecial(hoy);
+    if (minuto >= ent - 15 && minuto < ent) {
+      lista.push({ icono: '⏰', titulo: especial ? 'En ' + (ent - minuto) + ' minutos: entrada especial' : 'Tu entrada es en ' + (ent - minuto) + ' minutos',
+        texto: 'Entras a las ' + horaAmigable(horaEntrada(hoy)) + ' y sales a las ' + horaAmigable(horaSalida(hoy)) + '. ¡Llega puntual y mantén tu racha!' });
+    } else if (minuto >= ent + tolerancia + 15 && minuto < sal) {
+      lista.push({ icono: '⚠️', titulo: 'Aún no registras tu entrada',
+        texto: 'Ya pasó tu hora de entrada (' + horaAmigable(horaEntrada(hoy)) + '). Marca en cuanto llegues; si estás en una actividad fuera del colegio, usa "Actividad especial".' });
+    }
+  }
+  if (abierto) {
+    const salidaTurno = aMinutos(horaSalida(t.fecha));
+    let fin = fechaDeClave(t.fecha).getTime() + salidaTurno * 60000;
+    if (salidaTurno <= aMinutos(horaEntrada(t.fecha))) fin += 86400000; // salida del día siguiente
+    const faltanMin = Math.ceil((fin - ahora) / 60000);
+    if (faltanMin > 0 && faltanMin <= 10) {
+      const alSalir = minutosTrabajados(t, fin);
+      const faltan = (t.meta || metaDelDia(t.fecha)) - minutosPermisoDe(t) - alSalir;
+      lista.push({ icono: '🏁', titulo: 'Tu salida es en ' + faltanMin + ' minutos',
+        texto: 'A las ' + horaAmigable(horaSalida(t.fecha)) + ' llevarás ' + duracion(alSalir) + '. ' +
+          (faltan <= 0 ? 'Cumplirás tu meta del día. No olvides marcar tu salida.' : 'Te faltarán ' + duracion(faltan) + ' para tu meta del día.') });
+    }
+  }
+  return lista;
+}
+
+/** Tarjeta "Novedades" de Inicio (vacía = no se muestra). */
+function tarjetaNovedades() {
+  const items = leerBuzon().items;
+  const ahora = recordatoriosAhora();
+  if (!items.length && !ahora.length) return '';
+  const fila = (n, id) => '<div class="fila" style="align-items:flex-start;gap:10px"><span style="font-size:1.3rem">' + n.icono + '</span>' +
+    '<div class="crece"><p><b>' + esc(n.titulo) + '</b></p><p class="chico">' + esc(n.texto) + '</p>' +
+    (id ? '<button class="boton texto" style="align-self:flex-start;padding-left:0" data-accion="leerNovedad" data-valor="' + esc(id) + '">Entendido</button>' : '') +
+    '</div></div>';
+  return '<div class="tarjeta"><div class="fila"><h3 class="crece" style="color:var(--granate)">🔔 Novedades</h3>' +
+    (items.length > 1 ? '<button class="boton texto" data-accion="leerNovedades">Marcar todas</button>' : '') + '</div>' +
+    ahora.map(n => fila(n, '')).join('') + items.map(n => fila(n, n.id)).join('') + '</div>';
 }
 
 function mostrarFormularioSolicitud() {
@@ -1161,11 +1366,14 @@ function render() {
   else if (!estado.perfil) html = '<p class="cargando">Cargando tu perfil…</p>' + (estado.ocupado ? '' : '<button class="boton secundario" data-accion="actualizar">Reintentar</button>');
   else {
     conPestanas = true;
+    actualizarNovedades();
+    const sinLeer = leerBuzon().items.length;
     const visibles = PESTANAS.filter(p => (!p.marca || marcaAsistencia()) && (!p.admin || gestionaWeb()));
     if (!visibles.some(p => p.id === estado.pestana)) estado.pestana = 'inicio';
     html = ({ inicio: pantallaInicio, resumen: pantallaResumen, permisos: pantallaPermisos, admin: pantallaAdmin, perfil: pantallaPerfil })[estado.pestana]();
     nav.innerHTML = visibles.map(p => '<button class="' + (p.id === estado.pestana ? 'activa' : '') + '" data-accion="pestana" data-valor="' + p.id + '">' +
-      '<span class="icono">' + p.icono + '</span>' + p.texto + '</button>').join('');
+      '<span class="icono">' + p.icono + (p.id === 'inicio' && sinLeer ? '<span class="punto-aviso" aria-label="Novedades sin leer"></span>' : '') +
+      '</span>' + p.texto + '</button>').join('');
   }
   // Conserva lo escrito en el formulario de acceso al redibujar.
   const correoPrevio = $('correo') && $('correo').value, nombrePrevio = $('nombre') && $('nombre').value;

@@ -9,12 +9,15 @@
  * Hojas:
  *  - "Personal" (antes "Docentes"): un registro por miembro (correo, teléfono, rol, jornada y estado). El administrador asigna rol y
  *    jornada, y puede desactivar o eliminar miembros (se les cierra el acceso).
- *  - "Jornadas": horarios de trabajo (entrada, salida y días laborales) que el administrador crea y edita en la app.
+ *  - "Jornadas": horarios de trabajo (entrada, salida, días laborales y minutos de almuerzo, que no cuentan como
+ *    trabajo) que el administrador crea y edita en la app.
  *  - "Configuración": meta de horas y minutos de tolerancia (se cambian desde la app).
  *  - "Sedes": ubicación del colegio (geocerca) y cómo se comprueba la presencia: solo ubicación, Wi-Fi o QR.
  *  - Una hoja por miembro, con su nombre: una fila por día con entrada, salida, horas y observaciones.
  *  - "Calendario": vacaciones, feriados, permisos (por día o por horas) y entradas/salidas especiales.
  *  - "Solicitudes": permisos y vacaciones que el personal pide desde la app; al aprobarse pasan al calendario.
+ *    Las fechas de vacaciones y asuetos, y a quién aplican, las decide siempre la administración: la app no calcula
+ *    cuántos días le corresponden a nadie.
  *  - "Actividades especiales": días por revisar (actividad fuera del colegio, QR o Wi-Fi no verificados).
  *  - "Rechazados": intentos de marcaje no aceptados y su motivo.
  *
@@ -46,6 +49,10 @@ const CONFIG = {
   // Correos que entran como Supervisor la primera vez que se registran (opcional; el rol se puede cambiar después).
   // Quien no está en ninguna lista entra como Docente.
   SUPERVISORES: [],
+  // El almuerzo de cada jornada (Admin → Jornadas) no cuenta como trabajo. Como cada quien almuerza a distinta hora,
+  // se descuenta a quien pasa de estas horas en el colegio, y solo en días de más de estas horas (un sábado de
+  // 8:00 a 12:00 no lleva almuerzo). La app usa el mismo valor: si se cambia aquí, hay que cambiarlo también en ella.
+  HORAS_ANTES_DEL_ALMUERZO: 6,
   // Se rechazan marcas guardadas en el teléfono hace más de estos días.
   DIAS_MAXIMOS_PENDIENTE: 3,
   // Se rechazan lecturas GPS con un margen de error mayor a este valor (metros).
@@ -108,7 +115,8 @@ const DOCENTES = {
 const DOC = { CORREO: 0, NOMBRE: 1, HOJA: 2, DISPOSITIVO: 3, MODELO: 4, METODO: 5, REGISTRADO: 6, ROL: 7, JORNADA: 8,
   ESTADO: 9 };
 
-const JORNADAS = { nombre: 'Jornadas', encabezados: ['Código', 'Nombre', 'Entrada', 'Salida', 'Días', 'Horario por día'] };
+const JORNADAS = { nombre: 'Jornadas', encabezados: ['Código', 'Nombre', 'Entrada', 'Salida', 'Días', 'Horario por día',
+  'Almuerzo (min)'] };
 const CONFIGURACION = { nombre: 'Configuración', encabezados: ['Clave', 'Valor', 'Descripción'] };
 const SEDES = {
   nombre: 'Sedes',
@@ -167,6 +175,7 @@ const PERMISO_DE_ACCION = {
   adminAsignar: ['MIEMBROS'], adminEstado: ['MIEMBROS'], adminEliminarMiembro: ['MIEMBROS'], adminLiberar: ['MIEMBROS'],
   adminJornadas: ['JORNADAS', 'MIEMBROS'], adminGuardarJornada: ['JORNADAS'], adminEliminarJornada: ['JORNADAS'],
   adminEventos: ['CALENDARIO'], adminAgregarEvento: ['CALENDARIO'], adminEliminarEvento: ['CALENDARIO'],
+  adminVistaVacaciones: ['CALENDARIO', 'SOLICITUDES'],
   adminActividades: ['REVISION'], adminRevisarActividad: ['REVISION'],
   adminSolicitudes: ['SOLICITUDES'], adminRevisarSolicitud: ['SOLICITUDES'],
   adminReporte: ['REPORTES'], adminActualizarReportes: ['REPORTES'], adminResumenAnual: ['REPORTES'],
@@ -431,10 +440,17 @@ function leerJornadas() {
       salida: textoHora(v[3]).substring(0, 5),
       dias: dias.length ? dias : [1, 2, 3, 4, 5],
       porDia: leerHorarioPorDia(v[5]),
+      almuerzo: minutosAlmuerzoValidos(v[6]),
     };
   });
   _jornadas = resultado;
   return resultado;
+}
+
+/** Minutos de almuerzo de una jornada (0 = jornada continua, sin almuerzo; máximo 2 horas). */
+function minutosAlmuerzoValidos(valor) {
+  const n = Math.round(Number(valor));
+  return isFinite(n) && n > 0 ? Math.min(120, n) : 0;
 }
 
 function jornadaPorDefecto() {
@@ -443,7 +459,8 @@ function jornadaPorDefecto() {
 
 function jornadaJson(codigo) {
   const j = leerJornadas()[codigo] || leerJornadas()[jornadaPorDefecto()];
-  return { codigo: j.codigo, nombre: j.nombre, entrada: j.entrada, salida: j.salida, dias: j.dias, porDia: j.porDia || {} };
+  return { codigo: j.codigo, nombre: j.nombre, entrada: j.entrada, salida: j.salida, dias: j.dias, porDia: j.porDia || {},
+    almuerzo: j.almuerzo || 0 };
 }
 
 /** "6=08:00-12:00;7=09:00-13:00" → { 6: {entrada, salida}, 7: {…} } (días con horario distinto al general). */

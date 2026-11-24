@@ -262,6 +262,7 @@ function seccionSolicitudes() {
       esc(s.desde === s.hasta ? fechaLegible(s.desde) : fechaLegible(s.desde) + ' al ' + fechaLegible(s.hasta)) +
       (s.horaInicio ? ' · ' + esc(horaAmigable(s.horaInicio) + ' a ' + horaAmigable(s.horaFin)) : '') + '</p>' +
       '<p class="chico">“' + esc(s.motivo) + '”</p>' + (s.respuesta ? '<p class="chico">Respuesta: ' + esc(s.respuesta) + '</p>' : '') +
+      (s.vista ? htmlVistaVacaciones(s.vista, false) : '') +
       (s.estado !== 'PENDIENTE' ? '' : esMio(s.correo)
         ? '<p class="chico alerta"><b>Es tu solicitud: debe revisarla otro supervisor o el administrador.</b></p>'
         : '<div class="rejilla"><button class="boton secundario" data-accion="admSolicitud" data-valor="' + esc(s.id) +
@@ -289,12 +290,20 @@ function seccionMiembros() {
   return html;
 }
 
+/** Cuántos días laborales son unas vacaciones para una persona y si ya tiene vacaciones en esas fechas. */
+function htmlVistaVacaciones(v, conNombre) {
+  return '<div class="tarjeta" style="gap:4px">' + (conNombre ? '<b>' + esc(v.nombre) + '</b>' : '') +
+    '<p>' + textoDiasLaborales(v.dias) + '</p>' +
+    (v.avisos || []).map(a => '<p class="chico alerta">⚠️ ' + esc(a) + '</p>').join('') + '</div>';
+}
+
 // ----- Jornadas
 function seccionJornadas() {
   let html = botonAgregar('+ Nueva jornada', 'admNuevaJornada');
   (adm.jornadas || []).forEach(({ j, enUso }) => {
     html += '<div class="tarjeta"><h3>' + esc(j.nombre) + '</h3><p>' + esc('Entrada ' + horaAmigable(j.entrada) + ' · Salida ' + horaAmigable(j.salida)) +
       (terminaDiaSiguiente(j.entrada, j.salida) ? ' (día siguiente)' : '') + '</p><p class="chico">Días: ' + esc(textoDias(j.dias || [])) + '</p>' +
+      '<p class="chico">' + (j.almuerzo ? 'Almuerzo: ' + esc(duracion(j.almuerzo)) + ' (no cuenta como trabajo)' : 'Sin almuerzo (jornada continua)') + '</p>' +
       Object.keys(j.porDia || {}).filter(d => (j.dias || []).indexOf(Number(d)) >= 0).map(d =>
         '<p class="chico">' + esc(NOMBRES_DIAS[d] + ': ' + textoHorario(j.porDia[d].entrada, j.porDia[d].salida)) + '</p>').join('') +
       '<p class="chico">' + (enUso === 1 ? '1 miembro' : enUso + ' miembros') + '</p><div class="fila">' +
@@ -851,7 +860,8 @@ const accionesAdmin = {
   admNuevaJornada() { dialogoJornada(null); },
   admEditarJornada(b) { dialogoJornada((adm.jornadas || []).map(x => x.j).find(j => j.codigo === b.dataset.valor)); },
   admJorEntrada() {
-    const meta = Math.round((perfil().horasMeta || 8) * 60);
+    // La salida se calcula con la meta más el almuerzo (p. ej. 7:00 + 8 h + 1 h = 16:00).
+    const meta = Math.round((perfil().horasMeta || 8) * 60) + Number($('jo-almuerzo').value || 0);
     if ($('jo-auto').value === 'si') $('jo-salida').value = sumarMinutosHora($('jo-entrada').value, meta);
     avisoJornada();
   },
@@ -869,7 +879,8 @@ const accionesAdmin = {
     if ($('jo-nombre').value.trim().length < 2) return mostrarAviso('Escribe el nombre de la jornada.', true);
     if (!entrada || !salida || entrada === salida) return mostrarAviso('Elige la entrada y la salida (no pueden ser iguales).', true);
     if (!dias.length) return mostrarAviso('Elige al menos un día.', true);
-    hacerAdmin('adminGuardarJornada', { jornada: { codigo: $('jo-codigo').value, nombre: $('jo-nombre').value.trim(), entrada: entrada, salida: salida, dias: dias, porDia: porDia } });
+    hacerAdmin('adminGuardarJornada', { jornada: { codigo: $('jo-codigo').value, nombre: $('jo-nombre').value.trim(), entrada: entrada, salida: salida, dias: dias, porDia: porDia,
+      almuerzo: Number($('jo-almuerzo').value || 0) } });
   },
   admEliminarJornada(b) {
     mostrarDialogo('⚠️', '¿Eliminar esta jornada?', 'Solo se puede eliminar si ningún miembro la tiene asignada.',
@@ -902,10 +913,12 @@ const accionesAdmin = {
       '<div id="ev-permiso" hidden>' + casilla('ev-horas', 'Por horas (no todo el día)', false, ' data-cambio="admEvTipo"') +
       '<div class="rejilla" id="ev-horas-campos" hidden><label>Desde<input type="time" id="ev-hi"></label><label>Hasta<input type="time" id="ev-hf"></label></div></div>' +
       '<div class="rejilla" id="ev-especial" hidden><label>Entrada<input type="time" id="ev-he"></label><label>Salida (opcional)<input type="time" id="ev-hs"></label></div>' +
-      '<div class="rejilla"><label>Desde<input type="date" id="ev-desde" value="' + hoy + '"></label><label>Hasta<input type="date" id="ev-hasta" value="' + hoy + '"></label></div>' +
+      '<div class="rejilla"><label>Desde<input type="date" id="ev-desde" value="' + hoy + '" data-cambio="admEvTipo"></label>' +
+      '<label>Hasta<input type="date" id="ev-hasta" value="' + hoy + '" data-cambio="admEvTipo"></label></div>' +
       casilla('ev-todos', 'Para todo el personal', true, ' data-cambio="admEvTipo"') +
       '<div id="ev-personas" hidden style="max-height:180px;overflow:auto;display:flex;flex-direction:column;gap:6px">' +
-      (marcan.length ? marcan.map(m => casilla('ev-p-' + m.correo, m.nombre, false)).join('') : '<p class="chico">No hay miembros registrados.</p>') + '</div>' +
+      (marcan.length ? marcan.map(m => casilla('ev-p-' + m.correo, m.nombre, false, ' data-cambio="admEvTipo"')).join('') : '<p class="chico">No hay miembros registrados.</p>') + '</div>' +
+      '<div id="ev-vista" style="display:flex;flex-direction:column;gap:6px"></div>' +
       '<label>Detalle (opcional)<input id="ev-detalle" maxlength="200" placeholder="Ej.: cita médica"></label>');
     accionesAdmin.admEvTipo();
   },
@@ -915,6 +928,8 @@ const accionesAdmin = {
     $('ev-horas-campos').hidden = !(tipo === 'PERMISO' && $('ev-horas').checked);
     $('ev-especial').hidden = tipo !== 'ENTRADA_ESPECIAL';
     $('ev-personas').hidden = $('ev-todos').checked;
+    if ($('ev-hasta').value < $('ev-desde').value) $('ev-hasta').value = $('ev-desde').value;
+    vistaVacacionesEvento();
   },
   admGuardarEvento() {
     const tipo = $('ev-tipo').value;
@@ -1033,16 +1048,56 @@ const accionesAdmin = {
   admCerrarQr() { clearInterval(qrIntervalo); cerrarDialogo(); },
 };
 
-function avisoJornada() {
-  const e = $('jo-entrada').value, s = $('jo-salida').value;
-  $('jo-aviso').textContent = !e || !s ? '' : e === s ? 'La salida no puede ser igual a la entrada.'
-    : (terminaDiaSiguiente(e, s) ? 'Termina al día siguiente (turno nocturno): ' : 'Duración: ') + duracion(((aMinutos(s) - aMinutos(e)) + 1440) % 1440 || 1440) + '.';
+let vistaPedida = 0;
+
+/**
+ * Al dar vacaciones desde el calendario: muestra cuántos días laborales son para cada persona y avisa si alguien ya
+ * tiene vacaciones en esas fechas, antes de guardar.
+ */
+function vistaVacacionesEvento() {
+  const caja = $('ev-vista');
+  if (!caja) return;
+  const elegidos = (adm.miembros || []).filter(m => $('ev-p-' + m.correo) && $('ev-p-' + m.correo).checked).map(m => m.correo);
+  const todos = $('ev-todos').checked;
+  if ($('ev-tipo').value !== 'VACACIONES' || (!todos && !elegidos.length) || !$('ev-desde').value) { caja.innerHTML = ''; return; }
+  const pedido = ++vistaPedida;
+  caja.innerHTML = '<p class="chico">Contando días laborales…</p>';
+  pedirAdmin('adminVistaVacaciones', { aplicaA: todos ? 'Todos' : elegidos.join(', '), desde: $('ev-desde').value, hasta: $('ev-hasta').value || $('ev-desde').value })
+    .then(r => {
+      if (pedido !== vistaPedida || !$('ev-vista')) return;
+      const vistas = r.vistas || [];
+      if (!vistas.length) { caja.innerHTML = ''; return; }
+      if (todos) {
+        // Todo el personal: los días (con la jornada de la primera persona) y solo quienes tienen avisos.
+        const conAvisos = vistas.filter(v => (v.avisos || []).length);
+        caja.innerHTML = '<p class="chico">Son ' + textoDiasLaborales(vistas[0].dias) + ' con la jornada de ' + esc(vistas[0].nombre) + ' (puede variar según la jornada de cada persona).</p>' +
+          conAvisos.slice(0, 8).map(v => htmlVistaVacaciones(v, true)).join('') +
+          (conAvisos.length > 8 ? '<p class="chico">Y ' + (conAvisos.length - 8) + ' persona(s) más con avisos.</p>' : '');
+      } else {
+        caja.innerHTML = vistas.map(v => htmlVistaVacaciones(v, vistas.length > 1)).join('');
+      }
+    })
+    .catch(() => { if (pedido === vistaPedida && $('ev-vista')) caja.innerHTML = ''; });
 }
 
+function avisoJornada() {
+  const e = $('jo-entrada').value, s = $('jo-salida').value;
+  const total = ((aMinutos(s) - aMinutos(e)) + 1440) % 1440 || 1440;
+  const almuerzo = Number($('jo-almuerzo').value || 0);
+  // Como en el servidor: el almuerzo solo se descuenta en días de más de 6 horas.
+  const conAlmuerzo = almuerzo && total > HORAS_ANTES_DEL_ALMUERZO * 60;
+  $('jo-aviso').textContent = !e || !s ? '' : e === s ? 'La salida no puede ser igual a la entrada.'
+    : (terminaDiaSiguiente(e, s) ? 'Termina al día siguiente (turno nocturno): ' : 'Duración: ') + duracion(total) +
+      (conAlmuerzo ? ', ' + duracion(total - almuerzo) + ' de trabajo sin el almuerzo' : '') + '.';
+}
+
+const OPCIONES_ALMUERZO = [[0, 'Sin almuerzo (jornada continua)'], [30, '30 minutos'], [45, '45 minutos'], [60, '1 hora'], [90, '1 hora 30 minutos'], [120, '2 horas']];
+
 function dialogoJornada(j) {
+  const almuerzo = (j && j.almuerzo) || 0;
   const meta = Math.round((perfil().horasMeta || 8) * 60);
   const entrada = j ? j.entrada : '', salida = j ? j.salida : '';
-  const auto = !j || salida === sumarMinutosHora(entrada, meta);
+  const auto = !j || salida === sumarMinutosHora(entrada, meta + almuerzo);
   const dias = j ? j.dias || [] : [1, 2, 3, 4, 5];
   const porDia = (j && j.porDia) || {};
   const distinto = Object.keys(porDia).length > 0;
@@ -1051,7 +1106,11 @@ function dialogoJornada(j) {
     '<label>Nombre<input id="jo-nombre" maxlength="40" value="' + esc(j ? j.nombre : '') + '" placeholder="Ej.: Jornada matutina"></label>' +
     '<div class="rejilla"><label>Entrada<input type="time" id="jo-entrada" value="' + esc(entrada) + '" data-cambio="admJorEntrada"></label>' +
     '<label>Salida<input type="time" id="jo-salida" value="' + esc(salida) + '" data-cambio="admJorSalida"></label></div>' +
-    '<p class="chico" id="jo-aviso"></p><p class="chico">La salida se calcula sola con la meta (' + duracion(meta) + '); puedes cambiarla.</p>' +
+    '<label>Almuerzo (no cuenta como trabajo)<select id="jo-almuerzo" data-cambio="admJorEntrada">' +
+    OPCIONES_ALMUERZO.concat(OPCIONES_ALMUERZO.some(o => o[0] === almuerzo) ? [] : [[almuerzo, almuerzo + ' minutos']])
+      .map(o => opcion(o[0], o[1], o[0] === almuerzo)).join('') + '</select></label>' +
+    '<p class="chico">Cada quien almuerza a la hora que puede: se descuenta solo a quien pasa de 6 horas en el colegio, y solo en días de más de 6 horas.</p>' +
+    '<p class="chico" id="jo-aviso"></p><p class="chico">La salida se calcula sola con la meta (' + duracion(meta) + ') más el almuerzo; puedes cambiarla.</p>' +
     '<p class="chico">Días laborales</p><div class="chips">' + [1, 2, 3, 4, 5, 6, 7].map(d =>
       '<label class="chip" style="display:flex;flex-direction:row;gap:4px;align-items:center"><input type="checkbox" id="jo-dia-' + d + '"' + (dias.indexOf(d) >= 0 ? ' checked' : '') +
       ' data-cambio="admJorDias" style="width:auto">' + LETRAS_DIAS[d] + '</label>').join('') + '</div>' +

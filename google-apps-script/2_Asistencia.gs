@@ -367,6 +367,7 @@ function perfil(u, d) {
   const desde = fechaDesplazada(-60);
   const jornadas = leerJornadas();
   const config = leerConfig();
+  const eventos = leerEventos();
   return {
     ok: true,
     rol: u.rol,
@@ -375,7 +376,9 @@ function perfil(u, d) {
     tolerancia: config.tolerancia,
     horasMeta: config.horasMeta,
     sedes: leerSedes().map(sedeJson),
-    eventos: leerEventos().filter(e => aplicaA(e, u.correo) && e.hasta >= desde),
+    eventos: eventos.filter(e => aplicaA(e, u.correo) && e.hasta >= desde),
+    // Sus vacaciones y asuetos próximos, tal como los puso la administración (también los asignados sin solicitud).
+    diasLibres: marcaAsistencia(u.rol) ? proximosDiasLibres(u, eventos) : undefined,
     rolInfo: rolJson(u.rol),
     destacados: destacadosSemana(),
     dias: d.historial && marcaAsistencia(u.rol) ? misMarcas(u).dias : undefined,
@@ -417,11 +420,15 @@ function misMarcas(u) {
       const actividad = v[COL.ACTIVIDAD - 1] === 'Sí';
       const mf = conJornadaDeFila(u, v);
       const permisos = permisosPorHoras(mf, fecha, eventos);
-      let minutos = null;
+      let minutos = null, almuerzo = 0;
       if (entrada && salida) {
         minutos = aMinutos(salida) - aMinutos(entrada);
         if (minutos < 0) minutos += 1440; // turno que pasa la medianoche
         minutos = Math.max(0, minutos - minutosPermisoDentro(permisos, entrada, salida));
+        // El almuerzo no cuenta como trabajo.
+        const conAlmuerzo = minutos;
+        minutos = sinAlmuerzo(minutos, mf, fecha, eventos);
+        almuerzo = conAlmuerzo - minutos;
       }
       const meta = metaDelDia(mf, fecha, eventos);
       const limite = limiteEntrada(mf, fecha, eventos);
@@ -430,6 +437,7 @@ function misMarcas(u) {
         entrada: entrada,
         salida: salida,
         minutos: minutos,
+        almuerzo: almuerzo,
         meta: meta,
         extra: minutos === null ? 0 : Math.max(0, minutos - meta),
         permiso: minutosDePermisos(permisos),
@@ -544,13 +552,15 @@ function registrar(usuario, d) {
     let bruto = aMinutos(hora) - aMinutos(horaEntradaFila);
     if (bruto < 0) bruto += 1440; // salida después de la medianoche
     // El permiso que cae dentro de la jornada no se trabajó: se descuenta (cuenta para la meta, no como horas ni extra).
-    const minutos = Math.max(0, bruto - minutosPermisoDentro(permisos, horaEntradaFila, hora));
+    // El almuerzo tampoco cuenta como trabajo.
+    const minutos = sinAlmuerzo(Math.max(0, bruto - minutosPermisoDentro(permisos, horaEntradaFila, hora)),
+      usuario, fechaFila, eventos);
     const minutosPermiso = minutosDePermisos(permisos);
     const meta = metaDelDia(usuario, fechaFila, eventos);
     const esActividad = actividad || actividadDelDia;
     const cumplio = minutos + minutosPermiso >= meta;
     if (!esActividad && !cumplio) {
-      notas.push('Salida con ' + textoDuracion(minutos) + ' en el colegio' +
+      notas.push('Salida con ' + textoDuracion(minutos) + ' trabajadas' +
         (minutosPermiso ? ' + ' + textoDuracion(minutosPermiso) + ' de permiso' : '') +
         ' (meta ' + textoDuracion(meta) + ')');
     }
@@ -611,13 +621,43 @@ function horarioEspecial(miembro, fecha, eventos) {
     aplicaA(e, miembro.correo) && e.desde <= fecha && fecha <= e.hasta)[0];
 }
 
-/** Minutos de la meta de ese día: la de Configuración, o lo que dure el horario de ese día (o el especial) si es menos. */
+/**
+ * Minutos de la meta de ese día: la de Configuración, o lo que dure el horario de ese día (o el especial) sin el
+ * almuerzo, si es menos. Ej.: 7:00 a 16:00 con 1 h de almuerzo = 8 h.
+ */
 function metaDelDia(miembro, fecha, eventos) {
   const meta = leerConfig().horasMeta * 60;
+  return Math.min(meta, duracionDelDia(miembro, fecha, eventos) - almuerzoDelDia(miembro, fecha, eventos));
+}
+
+/** Minutos que dura el horario de ese día: el especial (si tiene salida) o el de su jornada para ese día. */
+function duracionDelDia(miembro, fecha, eventos) {
   const especial = horarioEspecial(miembro, fecha, eventos);
-  if (especial && especial.horaSalida) return Math.min(meta, duracionHorario(especial.horaEntrada, especial.horaSalida));
+  if (especial && especial.horaSalida) return duracionHorario(especial.horaEntrada, especial.horaSalida);
   const horario = horarioDelDia(jornadaJson(miembro.jornada), diaIso(fecha));
-  return Math.min(meta, duracionHorario(horario.entrada, horario.salida));
+  return duracionHorario(horario.entrada, horario.salida);
+}
+
+/**
+ * Minutos de almuerzo de ese día: los de su jornada, solo si el horario del día dura más de
+ * CONFIG.HORAS_ANTES_DEL_ALMUERZO horas (un sábado de 8:00 a 12:00 no lleva almuerzo). 0 = jornada continua.
+ */
+function almuerzoDelDia(miembro, fecha, eventos) {
+  const almuerzo = jornadaJson(miembro.jornada).almuerzo || 0;
+  return almuerzo && duracionDelDia(miembro, fecha, eventos) > CONFIG.HORAS_ANTES_DEL_ALMUERZO * 60 ? almuerzo : 0;
+}
+
+/**
+ * Quita el almuerzo de los minutos que la persona estuvo en el colegio. Cada quien almuerza a distinta hora, así que
+ * no se usa un horario fijo: se descuenta a medida que pasa de 6 horas en el colegio (o de lo que dure su jornada sin
+ * el almuerzo, si es menos), hasta completar el almuerzo. Quien se va antes no tiene descuento, quedarse más nunca
+ * resta, y la jornada completa da justo sus horas efectivas (7:00 a 16:00 con 1 h de almuerzo = 8 h).
+ */
+function sinAlmuerzo(minutos, miembro, fecha, eventos) {
+  const almuerzo = almuerzoDelDia(miembro, fecha, eventos);
+  if (!almuerzo) return minutos;
+  const desde = Math.min(CONFIG.HORAS_ANTES_DEL_ALMUERZO * 60, duracionDelDia(miembro, fecha, eventos) - almuerzo);
+  return minutos - Math.min(almuerzo, Math.max(0, minutos - desde));
 }
 
 /** Permisos por horas de un miembro en una fecha. */
@@ -782,19 +822,89 @@ function crearSolicitud(u, s) {
     if (!horaValida.test(inicio) || !horaValida.test(fin)) throw new Error('Elige la hora de inicio y de fin.');
     if (aMinutos(fin) <= aMinutos(inicio)) throw new Error('La hora final debe ser después de la inicial.');
   }
+  let dias = 0;
+  if (tipo === 'VACACIONES') {
+    const eventos = leerEventos();
+    dias = diasLaborales(u, desde, hasta, eventos, true);
+    if (!dias) throw new Error('En esas fechas no tienes días laborales: elige días en que trabajas.');
+    const choque = vacacionesQueChocan(u, desde, hasta, eventos)[0];
+    if (choque) throw new Error('Ya tienes vacaciones del ' + fechaCorta(choque.desde) + ' al ' + fechaCorta(choque.hasta) + '.');
+    const repetida = leerSolicitudes().filter(x => x.correo === u.correo && x.tipo === 'VACACIONES' &&
+      x.estado === 'PENDIENTE' && x.desde <= hasta && desde <= x.hasta)[0];
+    if (repetida) throw new Error('Ya pediste vacaciones en esas fechas; espera a que revisen esa solicitud o cancélala.');
+  }
   obtenerHoja(SOLICITUDES.nombre, SOLICITUDES.encabezados).appendRow([Utilities.getUuid(), new Date(), u.correo,
     u.nombre, tipo, "'" + desde, "'" + hasta, inicio ? "'" + inicio : '', fin ? "'" + fin : '', motivo,
     ESTADOS_SOLICITUD.PENDIENTE, '', '', '', '']);
-  return { ok: true, mensaje: 'Solicitud enviada. Aquí verás cuando la revisen.' };
+  return { ok: true, mensaje: 'Solicitud enviada' + (dias ? ' (' + dias + (dias === 1 ? ' día laboral)' : ' días laborales)') : '') +
+    '. Aquí verás cuando la revisen.' };
 }
 
-function cancelarSolicitud(u, id) {
-  const hoja = obtenerHoja(SOLICITUDES.nombre, SOLICITUDES.encabezados);
-  const fila = buscarFila(hoja, SOL.ID, String(id || '').toLowerCase());
-  if (!fila || String(fila.valores[SOL.CORREO]).toLowerCase() !== u.correo) throw new Error('La solicitud ya no existe.');
-  if (solicitudDe(fila.valores).estado !== 'PENDIENTE') throw new Error('Solo se pueden cancelar las solicitudes pendientes.');
-  hoja.getRange(fila.numero, SOL.ESTADO + 1).setValue(ESTADOS_SOLICITUD.CANCELADA);
-  return { ok: true, mensaje: 'Solicitud cancelada.' };
+// ---------------------------------------------------------------- Vacaciones y asuetos
+//
+// La administración decide qué fechas son vacaciones o asuetos y a quién aplican (todo el personal, algunas personas
+// o una sola). La app no calcula cuántos días le corresponden a nadie: solo muestra lo asignado y cuenta cuántos días
+// laborales abarca (los días de su jornada, sin contar los asuetos que caen en medio).
+
+/** "2026-12-14" + n días. */
+function sumarDias(fecha, n) {
+  const d = new Date(fecha + 'T12:00:00Z');
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().substring(0, 10);
+}
+
+/** "2026-12-14" → "14/12/2026". */
+const fechaCorta = f => f ? f.split('-').reverse().join('/') : '';
+
+/** ¿Hay un feriado o asueto para esa persona ese día? */
+function esFeriado(miembro, fecha, eventos) {
+  return eventos.some(e => e.tipo === 'FERIADO' && aplicaA(e, miembro.correo) && e.desde <= fecha && fecha <= e.hasta);
+}
+
+/**
+ * Días laborales de su jornada entre dos fechas, incluidas. [sinAsuetos] = no contar los días que son asueto
+ * (para vacaciones: un asueto en medio no es día de vacaciones).
+ */
+function diasLaborales(miembro, desde, hasta, eventos, sinAsuetos) {
+  let dias = 0;
+  for (let f = desde, n = 0; f <= hasta && n < 800; f = sumarDias(f, 1), n++) {
+    if (esDiaLaboral(miembro, f) && !(sinAsuetos && esFeriado(miembro, f, eventos))) dias++;
+  }
+  return dias;
+}
+
+/** Vacaciones de una persona (las suyas y las de todo el personal) que se cruzan con esas fechas. */
+function vacacionesQueChocan(miembro, desde, hasta, eventos) {
+  return eventos.filter(e => e.tipo === 'VACACIONES' && aplicaA(e, miembro.correo) && e.desde <= hasta && desde <= e.hasta);
+}
+
+/**
+ * Vacaciones y asuetos que la administración le asignó a una persona y que aún no terminan (los que está tomando y
+ * los próximos), en orden, con cuántos días laborales son.
+ */
+function proximosDiasLibres(miembro, eventos) {
+  const hoy = fechaDesplazada(0);
+  return eventos
+    .filter(e => (e.tipo === 'VACACIONES' || e.tipo === 'FERIADO') && aplicaA(e, miembro.correo) && e.hasta >= hoy)
+    .sort((a, b) => a.desde.localeCompare(b.desde))
+    .slice(0, 10)
+    .map(e => ({
+      id: e.id, tipo: e.tipo, desde: e.desde, hasta: e.hasta, detalle: e.detalle,
+      dias: diasLaborales(miembro, e.desde, e.hasta, eventos, e.tipo === 'VACACIONES'),
+    }));
+}
+
+/**
+ * Antes de dar vacaciones a una persona: cuántos días laborales son y si ya tiene vacaciones en esas fechas
+ * (en ese caso no se pueden guardar).
+ */
+function vistaVacaciones(miembro, desde, hasta, eventos) {
+  const dias = diasLaborales(miembro, desde, hasta, eventos, true);
+  const choque = vacacionesQueChocan(miembro, desde, hasta, eventos)[0];
+  const avisos = [];
+  if (choque) avisos.push('Ya tiene vacaciones del ' + fechaCorta(choque.desde) + ' al ' + fechaCorta(choque.hasta) + '.');
+  if (!dias) avisos.push('En esas fechas no tiene días laborales en su jornada.');
+  return { correo: miembro.correo, nombre: miembro.nombre, dias: dias, avisos: avisos, choque: !!choque };
 }
 
 // ---------------------------------------------------------------- Destacados de la semana
@@ -885,8 +995,11 @@ function onEdit(e) {
   }
 }
 
-/** Recalcula las columnas de una fila de la hoja de una persona a partir de su fecha, entrada y salida. */
-function recalcularFila(hoja, f, m, eventos) {
+/**
+ * Recalcula las columnas de una fila de la hoja de una persona a partir de su fecha, entrada y salida.
+ * [sinNota] = no anotar "Corregido por la administración" (cuando se recalcula todo, ver recalcularHoras).
+ */
+function recalcularFila(hoja, f, m, eventos, sinNota) {
   const v = hoja.getRange(f, 1, 1, ENCABEZADOS_DOCENTE.length).getValues()[0];
   const fecha = textoFecha(v[COL.FECHA - 1]);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) return;
@@ -908,7 +1021,7 @@ function recalcularFila(hoja, f, m, eventos) {
     const meta = metaDelDia(m, fecha, eventos);
     const permisos = permisosPorHoras(m, fecha, eventos);
     const permiso = minutosDePermisos(permisos);
-    const minutos = Math.max(0, bruto - minutosPermisoDentro(permisos, entrada, salida));
+    const minutos = sinAlmuerzo(Math.max(0, bruto - minutosPermisoDentro(permisos, entrada, salida)), m, fecha, eventos);
     horas = "'" + textoDuracion(minutos);
     cumplio = minutos + permiso >= meta ? 'Sí' : 'No';
     minutosAntes = actividad ? '' : minutosAntesDeSalida(m, fecha, eventos, entrada.substring(0, 5), salida.substring(0, 5));
@@ -920,10 +1033,33 @@ function recalcularFila(hoja, f, m, eventos) {
   hoja.getRange(f, COL.ESTADO, 1, 5).setValues([[estado, estadoEntrada, minutosTarde, minutosAntes, extra]]);
 
   // Observación: se quitan las notas automáticas que ya no aplican y se anota la corrección.
-  const notas = String(v[COL.OBSERVACION - 1] || '').split(' | ').filter(String)
+  const anterior = String(v[COL.OBSERVACION - 1] || '');
+  const notas = anterior.split(' | ').filter(String)
     .filter(n => !(/^Retraso:/.test(n) && !(minutosTarde > 0)))
     .filter(n => !(/^Salida con /.test(n) && cumplio === 'Sí'))
-    .filter(n => n !== 'Corregido por la administración');
-  notas.push('Corregido por la administración');
-  hoja.getRange(f, COL.OBSERVACION).setValue(notas.join(' | '));
+    .filter(n => sinNota || n !== 'Corregido por la administración');
+  if (!sinNota) notas.push('Corregido por la administración');
+  if (notas.join(' | ') !== anterior) hoja.getRange(f, COL.OBSERVACION).setValue(notas.join(' | '));
+}
+
+/**
+ * Ejecutar desde el editor después de poner o cambiar el almuerzo de una jornada: vuelve a calcular las columnas
+ * guardadas (Horas, Cumplió meta, Estado, Min tarde, Min antes y Horas extra) de las filas de todo el personal en la
+ * hoja principal, con el almuerzo ya descontado. No borra nada: las entradas, salidas y observaciones se conservan.
+ * Los reportes y la app ya lo calculan solos; esto solo deja al día lo que se ve en la hoja de cada persona.
+ */
+function recalcularHoras() {
+  const libro = libroAsistencia();
+  const eventos = leerEventos();
+  let filas = 0;
+  leerMiembros().filter(m => marcaAsistencia(m.rol)).forEach(m => {
+    const hoja = m.hoja && libro.getSheetByName(m.hoja);
+    if (!hoja) return;
+    for (let f = 2; f <= hoja.getLastRow(); f++) {
+      recalcularFila(hoja, f, m, eventos, true);
+      filas++;
+    }
+  });
+  refrescarPestanas();
+  Logger.log('Listo: se recalcularon ' + filas + ' filas.');
 }

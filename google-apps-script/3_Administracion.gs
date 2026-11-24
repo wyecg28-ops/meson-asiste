@@ -29,15 +29,24 @@ function administrar(admin, d) {
     case 'adminEventos': return { ok: true, eventos: leerEventos().filter(e => e.hasta >= fechaDesplazada(-30)) };
     case 'adminAgregarEvento': return adminAgregarEvento(admin, d.evento || {});
     case 'adminEliminarEvento': return adminEliminarEvento(d.id);
+    case 'adminVistaVacaciones': return adminVistaVacaciones(d);
     case 'adminActividades': return adminActividades();
     case 'adminRevisarActividad': return adminRevisarActividad(admin, d);
     case 'adminSolicitudes': {
       const ocultos = correosOcultos();
       // Con el rol de cada persona (sale en el PDF de la solicitud).
       const roles = {};
-      leerMiembros().forEach(m => { roles[m.correo] = m.rolNombre; });
+      const miembros = {};
+      leerMiembros().forEach(m => { roles[m.correo] = m.rolNombre; miembros[m.correo] = m; });
+      const eventos = leerEventos();
       return { ok: true, solicitudes: leerSolicitudes().filter(s => s.estado !== 'CANCELADA' && !ocultos[s.correo]).slice(0, 80)
-        .map(s => Object.assign(s, { rol: roles[String(s.correo).toLowerCase()] || '' })) };
+        .map(s => {
+          const correo = String(s.correo).toLowerCase();
+          // Vacaciones pendientes: cuántos días laborales son y si ya tiene vacaciones en esas fechas.
+          const vista = s.tipo === 'VACACIONES' && s.estado === 'PENDIENTE' && miembros[correo]
+            ? vistaVacaciones(miembros[correo], s.desde, s.hasta, eventos) : undefined;
+          return Object.assign(s, { rol: roles[correo] || '', vista: vista });
+        }) };
     }
     case 'adminRevisarSolicitud': return adminRevisarSolicitud(admin, d);
     case 'adminReporte': return adminReporte(d);
@@ -196,6 +205,10 @@ function adminGuardarJornada(j) {
   const entrada = String(j.entrada || '').trim();
   const salida = String(j.salida || '').trim();
   const dias = (j.dias || []).map(Number).filter(n => n >= 1 && n <= 7).sort();
+  // Minutos de almuerzo (no cuentan como trabajo). Si la app no lo manda (versión anterior), se conserva el que tenía.
+  const anterior = leerJornadas()[String(j.codigo || '').trim()];
+  const almuerzo = j.almuerzo === undefined || j.almuerzo === null ? (anterior ? anterior.almuerzo : 0)
+    : minutosAlmuerzoValidos(j.almuerzo);
   if (nombre.length < 2) throw new Error('Escribe el nombre de la jornada.');
   if (!/^\d{2}:\d{2}$/.test(entrada) || !/^\d{2}:\d{2}$/.test(salida)) throw new Error('Elige la hora de entrada y de salida.');
   // Salida menor que la entrada = termina al día siguiente (turno nocturno, p. ej. 18:00 → 02:00).
@@ -215,9 +228,9 @@ function adminGuardarJornada(j) {
   const hoja = obtenerHoja(JORNADAS.nombre, JORNADAS.encabezados);
   const jornadas = leerJornadas();
   let codigo = String(j.codigo || '').trim();
-  const fila = [codigo, nombre, "'" + entrada, "'" + salida, "'" + dias.join(','), porDia.sort().join(';')];
+  const fila = [codigo, nombre, "'" + entrada, "'" + salida, "'" + dias.join(','), porDia.sort().join(';'), almuerzo];
   if (codigo && jornadas[codigo]) {
-    hoja.getRange(buscarFila(hoja, 0, codigo.toLowerCase()).numero, 1, 1, 6).setValues([fila]);
+    hoja.getRange(buscarFila(hoja, 0, codigo.toLowerCase()).numero, 1, 1, fila.length).setValues([fila]);
   } else {
     const letras = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
     fila[0] = letras.filter(l => !jornadas[l])[0] || ('J' + Date.now());
@@ -254,6 +267,14 @@ function agregarEvento(creador, e) {
     correos.forEach(c => { if (!buscarFila(docentes, DOC.CORREO, c)) throw new Error('No se encontró a ' + c + '.'); });
   }
   const aplica = paraTodos ? 'Todos' : correos.join(', ');
+  // No se dan vacaciones dos veces en las mismas fechas a la misma persona (los días se contarían doble).
+  if (e.tipo === 'VACACIONES' && !paraTodos) {
+    const eventos = leerEventos();
+    leerMiembros().filter(m => correos.indexOf(m.correo) >= 0).forEach(m => {
+      const choque = vacacionesQueChocan(m, e.desde, hasta, eventos)[0];
+      if (choque) throw new Error(m.nombre + ' ya tiene vacaciones del ' + fechaCorta(choque.desde) + ' al ' + fechaCorta(choque.hasta) + '.');
+    });
+  }
   const hora = String(e.horaEntrada || '').trim();
   if (e.tipo === 'ENTRADA_ESPECIAL' && !horaValida.test(hora)) {
     throw new Error('Elige la hora de entrada especial.');
@@ -278,7 +299,26 @@ function agregarEvento(creador, e) {
 
 function adminAgregarEvento(admin, e) {
   agregarEvento(admin.correo, e);
-  return { ok: true, mensaje: TIPOS_EVENTO[e.tipo] + ' agregado al calendario.' };
+  let mensaje = TIPOS_EVENTO[e.tipo] + ' agregado al calendario.';
+  if (e.tipo === 'VACACIONES') mensaje = 'Vacaciones agregadas al calendario. Ya aparecen en la app de cada persona.';
+  if (e.tipo === 'FERIADO') mensaje = 'Asueto agregado al calendario. Ya aparece en la app de cada persona.';
+  return { ok: true, mensaje: mensaje };
+}
+
+/**
+ * Antes de dar vacaciones: para cada persona (o todo el personal que marca), cuántos días laborales son y si ya tiene
+ * vacaciones en esas fechas. d: { aplicaA: 'Todos' | 'correo1, correo2', desde, hasta }.
+ */
+function adminVistaVacaciones(d) {
+  const desde = String(d.desde || ''), hasta = String(d.hasta || d.desde || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(desde) || !/^\d{4}-\d{2}-\d{2}$/.test(hasta) || hasta < desde) return { ok: true, vistas: [] };
+  const correos = String(d.aplicaA || 'Todos').split(',').map(c => c.trim().toLowerCase()).filter(String);
+  const todos = !correos.length || correos.indexOf('todos') >= 0;
+  const eventos = leerEventos();
+  const vistas = leerMiembros()
+    .filter(m => m.estado === 'ACTIVO' && marcaAsistencia(m.rol) && (todos || correos.indexOf(m.correo) >= 0))
+    .map(m => vistaVacaciones(m, desde, hasta, eventos));
+  return { ok: true, vistas: vistas };
 }
 
 function adminEliminarEvento(id) {
@@ -312,7 +352,7 @@ function adminRevisarSolicitud(admin, d) {
     aprobar ? ESTADOS_SOLICITUD.APROBADA : ESTADOS_SOLICITUD.RECHAZADA,
     String(d.respuesta || '').trim(), admin.nombre, new Date(), idEvento,
   ]]);
-  return { ok: true, mensaje: aprobar ? 'Solicitud aprobada y agregada al calendario.' : 'Solicitud rechazada.' };
+  return { ok: true, mensaje: aprobar ? 'Solicitud aprobada y agregada al calendario de ' + s.nombre + '.' : 'Solicitud rechazada.' };
 }
 
 function adminActividades() {
@@ -432,8 +472,8 @@ function evaluarMes(m, filas, mes, eventos, hoy) {
         if (salida) {
           minutos = aMinutos(salida) - aMinutos(entrada);
           if (minutos < 0) minutos += 1440; // turno que pasa la medianoche
-          // El permiso dentro de la jornada no se trabajó: se descuenta.
-          minutos = Math.max(0, minutos - minutosPermisoDentro(permisos, entrada, salida));
+          // El permiso dentro de la jornada no se trabajó: se descuenta. El almuerzo tampoco cuenta como trabajo.
+          minutos = sinAlmuerzo(Math.max(0, minutos - minutosPermisoDentro(permisos, entrada, salida)), mf, fecha, eventos);
           r.minutos += minutos;
           // Horas extra: lo que pasa de la meta del día (solo marcas verificadas).
           if (revision !== POR_REVISAR && revision !== 'Rechazada') extra = Math.max(0, minutos - meta);
@@ -1027,6 +1067,7 @@ const NOMBRES_ACCION = {
   adminEstado: 'Activar o desactivar miembro', adminEliminarMiembro: 'Eliminar miembro', adminLiberar: 'Liberar teléfono de un miembro',
   adminJornadas: 'Ver jornadas', adminGuardarJornada: 'Guardar jornada', adminEliminarJornada: 'Eliminar jornada',
   adminEventos: 'Ver calendario', adminAgregarEvento: 'Agregar al calendario', adminEliminarEvento: 'Eliminar del calendario',
+  adminVistaVacaciones: 'Ver días de vacaciones',
   adminActividades: 'Ver por revisar', adminRevisarActividad: 'Revisar actividad especial',
   adminSolicitudes: 'Ver solicitudes', adminRevisarSolicitud: 'Revisar solicitud de permiso',
   adminReporte: 'Ver reporte del mes', adminResumenAnual: 'Ver resumen anual', adminActualizarReportes: 'Actualizar pestañas de la hoja',
@@ -1039,7 +1080,7 @@ const NOMBRES_ACCION = {
 // Consultas: solo se anotan si fallan (si no, la actualización automática llenaría la bitácora).
 const SOLO_CONSULTA = ['recuperar', 'perfil', 'ranking', 'misMarcas', 'misSolicitudes', 'adminHoy', 'adminMiembros',
   'adminJornadas', 'adminEventos', 'adminActividades', 'adminSolicitudes', 'adminReporte', 'adminResumenAnual', 'adminConfig',
-  'adminRoles'];
+  'adminRoles', 'adminVistaVacaciones'];
 
 /**
  * Anota en la pestaña "Bitácora" quién hizo qué, desde dónde y si salió bien o con qué error.
@@ -1101,7 +1142,7 @@ function detalleBitacora(d) {
   if (typeof d.jornada === 'string' && d.jornada) partes.push('jornada ' + d.jornada);
   if (d.jornada && typeof d.jornada === 'object') {
     partes.push('jornada "' + (d.jornada.nombre || '') + '" ' + (d.jornada.entrada || '') + '–' + (d.jornada.salida || '') +
-      ' días ' + (d.jornada.dias || []).join(','));
+      ' días ' + (d.jornada.dias || []).join(',') + (d.jornada.almuerzo ? ' almuerzo ' + d.jornada.almuerzo + ' min' : ''));
   }
   if (d.estado) partes.push('estado ' + d.estado);
   if (d.aprobar === true || d.aprobar === false) partes.push(d.aprobar ? 'aprobada' : 'rechazada');

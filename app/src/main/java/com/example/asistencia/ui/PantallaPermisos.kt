@@ -47,12 +47,14 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.asistencia.datos.DiaLibreAsignado
 import com.example.asistencia.datos.SheetsApi
 import com.example.asistencia.datos.Solicitud
 import com.example.asistencia.datos.aMinutos
 import com.example.asistencia.datos.claveDia
 import com.example.asistencia.datos.datosDelTelefono
 import com.example.asistencia.datos.mensajeDeError
+import com.example.asistencia.datos.textoDiasLaborales
 import com.example.asistencia.ui.theme.colorAviso
 import com.example.asistencia.ui.theme.colorExito
 import kotlinx.coroutines.CancellationException
@@ -134,7 +136,7 @@ class PermisosViewModel(app: Application) : AndroidViewModel(app) {
 }
 
 @Composable
-fun PantallaPermisos(avisos: SnackbarHostState, vm: PermisosViewModel = viewModel()) {
+fun PantallaPermisos(avisos: SnackbarHostState, diasLibres: List<DiaLibreAsignado>? = null, vm: PermisosViewModel = viewModel()) {
     val estado by vm.estado.collectAsState()
     var nueva by remember { mutableStateOf(false) }
     var cancelando by remember { mutableStateOf<Solicitud?>(null) }
@@ -152,6 +154,7 @@ fun PantallaPermisos(avisos: SnackbarHostState, vm: PermisosViewModel = viewMode
             Column(Modifier.weight(1f)) { Titulo("Permisos", "Pide permisos o vacaciones a la dirección.") }
             TextButton(onClick = vm::cargar, enabled = !estado.cargando) { Text("Actualizar") }
         }
+        diasLibres?.let { TarjetaDiasLibres(it) }
         Button(
             onClick = { nueva = true },
             shape = RoundedCornerShape(14.dp),
@@ -185,6 +188,36 @@ fun PantallaPermisos(avisos: SnackbarHostState, vm: PermisosViewModel = viewMode
             confirmButton = { TextButton(onClick = { cancelando = null; vm.cancelar(s) }) { Text("Cancelar solicitud") } },
             dismissButton = { TextButton(onClick = { cancelando = null }) { Text("Volver") } },
         )
+    }
+}
+
+/**
+ * Mis vacaciones y asuetos: los que la dirección me asignó (pedidos o puestos directamente en el calendario) y que aún
+ * no terminan, con cuántos días laborales son. La app no calcula cuántos días le corresponden a nadie.
+ */
+@Composable
+private fun TarjetaDiasLibres(lista: List<DiaLibreAsignado>) {
+    val hoy = claveDia(System.currentTimeMillis())
+    Tarjeta {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("🌴 Mis vacaciones y asuetos", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.secondary)
+            lista.forEach { d ->
+                val ahora = d.desde <= hoy
+                Text(
+                    (if (ahora) "🟢 " else "📅 ") + "${d.tipoTexto}: " +
+                        (if (d.desde == d.hasta) fechaLegible(d.desde) else "${fechaLegible(d.desde)} al ${fechaLegible(d.hasta).lowercase()}") +
+                        " · ${textoDiasLaborales(d.dias)}" + if (d.detalle.isNotBlank()) " (${d.detalle})" else "",
+                    style = MaterialTheme.typography.bodyMedium, fontWeight = if (ahora) FontWeight.SemiBold else FontWeight.Normal,
+                )
+            }
+            if (lista.isEmpty()) {
+                Text("No tienes vacaciones ni asuetos próximos.", style = MaterialTheme.typography.bodySmall)
+            }
+            Text(
+                "Las fechas las asigna la dirección.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 

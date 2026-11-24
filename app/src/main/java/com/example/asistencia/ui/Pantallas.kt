@@ -45,6 +45,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
@@ -164,7 +166,12 @@ private fun Contenido(vm: AsistenciaViewModel) {
                         NavigationBarItem(
                             selected = pestana == p,
                             onClick = { pestana = p },
-                            icon = { Icon(painterResource(p.icono), contentDescription = null) },
+                            icon = {
+                                // Puntito rojo en Inicio: hay novedades sin leer.
+                                if (p == Pestana.INICIO && estado.novedades.isNotEmpty()) {
+                                    BadgedBox(badge = { Badge() }) { Icon(painterResource(p.icono), contentDescription = "Inicio, hay novedades") }
+                                } else Icon(painterResource(p.icono), contentDescription = null)
+                            },
                             label = { Text(p.etiqueta, maxLines = 1, softWrap = false, style = MaterialTheme.typography.labelSmall) },
                         )
                     }
@@ -188,9 +195,11 @@ private fun Contenido(vm: AsistenciaViewModel) {
                     onReintentar = vm::reintentarEnvio,
                     onVerEstadisticas = { pestana = Pestana.ESTADISTICAS },
                     onMesRanking = { vm.cargarRanking(it) },
+                    onLeerNovedad = vm::leerNovedad,
+                    onLeerNovedades = vm::leerNovedades,
                 )
                 Pestana.ESTADISTICAS -> ResumenEHistorial(estado)
-                Pestana.PERMISOS -> PantallaPermisos(avisos)
+                Pestana.PERMISOS -> PantallaPermisos(avisos, estado.perfil.diasLibres)
                 Pestana.ADMIN -> PantallaAdmin(avisos, estado.perfil, estado.correo.orEmpty())
                 Pestana.PERFIL -> PantallaPerfil(
                     estado = estado,

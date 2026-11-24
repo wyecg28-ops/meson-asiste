@@ -47,7 +47,7 @@ fun formatoDuracion(minutos: Long): String {
 fun formatoDuracionCorta(minutos: Long) = if (minutos < 60) "${minutos}m" else "${minutos / 60}h ${minutos % 60}m"
 
 /** Lo ocurrido en un día: su entrada y su salida válidas, más todas las marcas (también rechazadas). */
-class Jornada(val dia: Long, val marcas: List<Marca>, perfil: Perfil) {
+class Jornada(val dia: Long, val marcas: List<Marca>, private val perfil: Perfil) {
     private val validas = marcas.filter { it.estado != EstadoMarca.RECHAZADA }
     val entrada = validas.filter { it.tipo == TipoRegistro.ENTRADA.name }.minByOrNull { it.fechaHora }
     val salida = validas.filter { it.tipo == TipoRegistro.SALIDA.name }.maxByOrNull { it.fechaHora }
@@ -81,7 +81,8 @@ class Jornada(val dia: Long, val marcas: List<Marca>, perfil: Perfil) {
 
     /**
      * Minutos entre entrada y salida (si el turno sigue abierto, hasta [ahora]), sin el tiempo de permiso que cae
-     * en medio: por ejemplo, con permiso de 12:00 a 13:00 de 7:00 a 16:00 son 8 h. Ese permiso cuenta para la meta.
+     * en medio (por ejemplo, con permiso de 12:00 a 13:00 de 7:00 a 16:00 son 8 h; ese permiso cuenta para la meta)
+     * ni el almuerzo de la jornada, que no cuenta como trabajo.
      */
     fun minutosTrabajados(ahora: Long): Long? {
         val e = entrada ?: return null
@@ -92,7 +93,7 @@ class Jornada(val dia: Long, val marcas: List<Marca>, perfil: Perfil) {
             val (i, f) = if (i0 < inicio && fin - dia > 24 * 60 * 60_000L) (i0 + 86_400_000L) to (f0 + 86_400_000L) else i0 to f0
             max(0L, minOf(f, fin) - maxOf(i, inicio))
         }
-        return max(0L, (fin - inicio - permiso) / 60_000)
+        return perfil.sinAlmuerzo(max(0L, (fin - inicio - permiso) / 60_000), dia)
     }
 
     /** null mientras no haya salida. */

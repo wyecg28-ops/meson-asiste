@@ -125,6 +125,8 @@ data class Horario(
     val salida: String,
     val dias: List<Int> = listOf(1, 2, 3, 4, 5),
     val porDia: Map<Int, HoraDia> = emptyMap(),
+    /** Minutos de almuerzo: no cuentan como trabajo (0 = jornada continua). */
+    val almuerzo: Int = 0,
 ) {
     val minutoEntrada get() = aMinutos(entrada)
     val minutoSalida get() = aMinutos(salida)
@@ -150,6 +152,7 @@ data class Horario(
         .put("porDia", JSONObject().apply {
             porDia.forEach { (d, h) -> put(d.toString(), JSONObject().put("entrada", h.entrada).put("salida", h.salida)) }
         })
+        .put("almuerzo", almuerzo)
 
     companion object {
         fun deJson(j: JSONObject): Horario {
@@ -169,10 +172,68 @@ data class Horario(
                 dias = j.optJSONArray("dias")?.let { a -> (0 until a.length()).map { a.getInt(it) } }
                     ?.takeIf { it.isNotEmpty() } ?: listOf(1, 2, 3, 4, 5),
                 porDia = porDia,
+                almuerzo = j.optInt("almuerzo", 0).coerceIn(0, 120),
             )
         }
     }
 }
+
+/** El almuerzo se descuenta a quien pasa de estas horas en el colegio, en días de más de estas horas (igual que el servidor). */
+const val HORAS_ANTES_DEL_ALMUERZO = 6
+
+/**
+ * Vacaciones o asueto que la administración le asignó a la persona (pedido o puesto directamente en el calendario) y
+ * que aún no termina, con cuántos días laborales de su jornada abarca. La app no calcula cuántos días le corresponden.
+ */
+data class DiaLibreAsignado(
+    val id: String,
+    /** "VACACIONES" o "FERIADO" (asueto). */
+    val tipo: String,
+    val desde: String,
+    val hasta: String,
+    val dias: Int,
+    val detalle: String,
+) {
+    val esVacaciones get() = tipo == "VACACIONES"
+    val tipoTexto get() = if (esVacaciones) "Vacaciones" else "Asueto"
+
+    fun aJson(): JSONObject = JSONObject()
+        .put("id", id).put("tipo", tipo).put("desde", desde).put("hasta", hasta).put("dias", dias).put("detalle", detalle)
+
+    companion object {
+        fun deJson(j: JSONObject) = DiaLibreAsignado(
+            id = j.optString("id"),
+            tipo = j.optString("tipo", "VACACIONES"),
+            desde = j.optString("desde"),
+            hasta = j.optString("hasta"),
+            dias = j.optInt("dias"),
+            detalle = j.optString("detalle"),
+        )
+    }
+}
+
+/** Antes de dar vacaciones a una persona: cuántos días laborales son y si ya tiene vacaciones en esas fechas (del servidor). */
+data class VistaVacaciones(
+    val correo: String,
+    val nombre: String,
+    val dias: Int,
+    val avisos: List<String>,
+) {
+    companion object {
+        fun deJson(j: JSONObject?): VistaVacaciones? {
+            j ?: return null
+            return VistaVacaciones(
+                correo = j.optString("correo"),
+                nombre = j.optString("nombre"),
+                dias = j.optInt("dias"),
+                avisos = j.optJSONArray("avisos")?.let { a -> (0 until a.length()).map { a.optString(it) } } ?: emptyList(),
+            )
+        }
+    }
+}
+
+/** "1 día laboral", "8 días laborales". */
+fun textoDiasLaborales(n: Int) = if (n == 1) "1 día laboral" else "$n días laborales"
 
 /** Ubicación del colegio (geocerca) y cómo se comprueba la presencia: UBICACION, WIFI o QR. */
 data class Sede(
@@ -288,6 +349,11 @@ data class Perfil(
     val eventos: List<Evento>,
     val sedes: List<Sede> = emptyList(),
     val destacados: Destacados? = null,
+    /**
+     * Sus vacaciones y asuetos próximos, tal como los asignó la dirección. null = el servidor no los mandó (su rol no
+     * marca o el servidor es de una versión anterior).
+     */
+    val diasLibres: List<DiaLibreAsignado>? = null,
 ) {
     val esAdministrador get() = rol.esAdministrador
 
@@ -336,13 +402,33 @@ data class Perfil(
     fun horaSalida(dia: Long): String =
         entradaEspecial(dia)?.horaSalida?.takeIf { it.isNotBlank() } ?: horarioDelDia(dia).salida
 
-    /** Meta de ese día: la de Configuración (8 h), o lo que dure el horario de ese día (o el especial) si es menos. */
-    fun metaDelDia(dia: Long): Int {
+    /**
+     * Meta de ese día: la de Configuración (8 h), o lo que dure el horario de ese día (o el especial) sin el almuerzo,
+     * si es menos. Ej.: 7:00 a 16:00 con 1 h de almuerzo = 8 h.
+     */
+    fun metaDelDia(dia: Long): Int = minOf(metaMinutos, duracionDelDia(dia) - almuerzoDelDia(dia))
+
+    /** Minutos que dura el horario de ese día: el especial (si tiene salida) o el de la jornada. */
+    fun duracionDelDia(dia: Long): Int {
         val especial = entradaEspecial(dia)
-        val duracion = if (especial != null && especial.horaSalida.isNotBlank()) {
+        return if (especial != null && especial.horaSalida.isNotBlank()) {
             duracionHorario(especial.horaEntrada, especial.horaSalida)
         } else horarioDelDia(dia).let { duracionHorario(it.entrada, it.salida) }
-        return minOf(metaMinutos, duracion)
+    }
+
+    /** Almuerzo de ese día: el de la jornada, solo en días de más de 6 horas (un sábado de 8:00 a 12:00 no lleva). */
+    fun almuerzoDelDia(dia: Long): Int =
+        if (horario.almuerzo > 0 && duracionDelDia(dia) > HORAS_ANTES_DEL_ALMUERZO * 60) horario.almuerzo else 0
+
+    /**
+     * Quita el almuerzo de los minutos en el colegio. Cada quien almuerza a distinta hora: se descuenta a medida que
+     * pasa de 6 h (o de lo que dure su jornada sin el almuerzo, si es menos) hasta completarlo. Igual que el servidor.
+     */
+    fun sinAlmuerzo(minutos: Long, dia: Long): Long {
+        val almuerzo = almuerzoDelDia(dia).toLong()
+        if (almuerzo == 0L) return minutos
+        val desde = minOf(HORAS_ANTES_DEL_ALMUERZO * 60L, duracionDelDia(dia) - almuerzo)
+        return minutos - minOf(almuerzo, maxOf(0L, minutos - desde))
     }
 
     /** Entrar en este minuto o antes cuenta como puntual. */
@@ -358,6 +444,7 @@ data class Perfil(
         .put("eventos", JSONArray().apply { eventos.forEach { put(it.aJson()) } })
         .put("sedes", JSONArray().apply { sedes.forEach { put(it.aJson()) } })
         .apply { destacados?.let { put("destacados", it.aJson()) } }
+        .apply { diasLibres?.let { lista -> put("diasLibres", JSONArray().apply { lista.forEach { put(it.aJson()) } }) } }
 
     companion object {
         private val JORNADA_A = Horario("A", "Jornada A", "07:00", "16:00")
@@ -388,6 +475,7 @@ data class Perfil(
                 sedes = j.optJSONArray("sedes")?.let { a -> (0 until a.length()).map { Sede.deJson(a.getJSONObject(it)) } }
                     ?: emptyList(),
                 destacados = Destacados.deJson(j.optJSONObject("destacados")),
+                diasLibres = j.optJSONArray("diasLibres")?.let { a -> (0 until a.length()).map { DiaLibreAsignado.deJson(a.getJSONObject(it)) } },
             )
         }
     }

@@ -31,6 +31,13 @@ import com.example.asistencia.datos.formatoDuracion
 import com.example.asistencia.datos.formatoHora
 import com.example.asistencia.datos.inicioDelDia
 import com.example.asistencia.datos.minutoDelDia
+import com.example.asistencia.datos.Novedad
+import com.example.asistencia.datos.Novedades
+import com.example.asistencia.datos.aMinutos
+import com.example.asistencia.datos.claveDia
+import com.example.asistencia.datos.diaIso
+import com.example.asistencia.datos.terminaDiaSiguiente
+import com.example.asistencia.datos.textoDiasLaborales
 import com.example.asistencia.notificaciones.Notificaciones
 import com.example.asistencia.notificaciones.Recordatorios
 import com.example.asistencia.ubicacion.Ubicacion
@@ -91,6 +98,8 @@ data class EstadoUi(
     val cargandoRanking: Boolean = false,
     /** El super administrador entra en un dispositivo nuevo: correo y mensaje para pedir su clave. */
     val pedirClave: Pair<String, String>? = null,
+    /** Avisos de la tarjeta "Novedades" que aún no se marcan como leídos. */
+    val novedades: List<Novedad> = emptyList(),
 ) {
     val registrado get() = correo != null
     val listo get() = registrado && permisosListos
@@ -171,7 +180,68 @@ class AsistenciaViewModel(app: Application) : AndroidViewModel(app) {
         cuentas = sesion.cuentas,
         accesoCerrado = sesion.accesoCerrado,
         marcas = visibles(),
+        novedades = buzon.items(),
     ).let { it.copy(bloqueado = it.listo && it.entraConHuella) }
+
+    // ---------- Novedades (tarjeta de Inicio) ----------
+
+    /** Buzón de novedades de la cuenta abierta. */
+    private val buzon get() = Novedades(getApplication(), sesion.correo)
+
+    private fun agregarNovedad(n: Novedad) {
+        buzon.agregar(n)
+        _estado.update { it.copy(novedades = buzon.items()) }
+    }
+
+    /** "Entendido": quita un aviso de la tarjeta. */
+    fun leerNovedad(id: String) {
+        buzon.quitar(id)
+        _estado.update { it.copy(novedades = buzon.items()) }
+    }
+
+    fun leerNovedades() {
+        buzon.quitarTodas()
+        _estado.update { it.copy(novedades = emptyList()) }
+    }
+
+    /**
+     * Resumen de la semana en la tarjeta de Novedades: al terminar el último día laboral (media hora después de la
+     * salida) o en el fin de semana, una vez por semana. Es el mismo resumen que llega como notificación.
+     */
+    private fun revisarResumenSemanal() {
+        val perfil = sesion.perfil
+        if (sesion.correo == null || !perfil.marca) return
+        val ahora = System.currentTimeMillis()
+        val hoy = inicioDelDia(ahora)
+        val ultimo = perfil.horario.dias.maxOrNull() ?: 5
+        val entrada = perfil.horaEntrada(hoy)
+        val salida = perfil.horaSalida(hoy)
+        val termino = diaIso(ahora) > ultimo || (diaIso(ahora) == ultimo && !terminaDiaSiguiente(entrada, salida) &&
+            minutoDelDia(ahora) >= aMinutos(salida) + 30)
+        val lunes = java.util.Calendar.getInstance().apply {
+            timeInMillis = hoy
+            while (get(java.util.Calendar.DAY_OF_WEEK) != java.util.Calendar.MONDAY) add(java.util.Calendar.DAY_OF_YEAR, -1)
+        }.timeInMillis.let(::claveDia)
+        val b = buzon
+        if (!termino || b.semanaResumida == lunes) return
+        val e = calcularEstadisticas(marcas.todas(), perfil, Periodo.SEMANA, ahora)
+        if (e.diasAsistidos > 0) {
+            agregarNovedad(
+                Novedad(
+                    "semana-$lunes", "📊",
+                    when {
+                        e.tardes == 0 && e.metaIncompleta == 0 -> "¡Felicidades! Semana perfecta"
+                        (e.puntualidad ?: 100) >= 80 -> "¡Buena semana!"
+                        else -> "Tu semana en resumen"
+                    },
+                    "${e.diasAsistidos} días · ${e.puntuales} puntuales · ${e.tardes} tarde · ${e.metaCumplida} con la meta " +
+                        "cumplida · ${formatoDuracion(e.minutosTrabajados)} en total" +
+                        (if (e.minutosExtra > 0) " · ${formatoDuracion(e.minutosExtra)} extra" else "") + ".",
+                ),
+            )
+        }
+        b.semanaResumida = lunes
+    }
 
     // ---------- Bloqueo con huella al abrir ----------
 
@@ -507,17 +577,38 @@ class AsistenciaViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun mostrarMensaje(mensaje: Mensaje) = _estado.update { it.copy(mensaje = mensaje) }
 
+    /**
+     * Notificación cuando la dirección le asigna vacaciones o un asueto nuevos (aprobados o puestos directamente en el
+     * calendario), para que se entere aunque no abra la pantalla de Permisos. La primera vez (sin datos anteriores) no avisa.
+     */
+    private fun avisarVacacionesNuevas(anterior: Perfil, nuevo: Perfil) {
+        val antes = anterior.diasLibres ?: return
+        nuevo.diasLibres.orEmpty()
+            .filter { d -> antes.none { it.id == d.id } }
+            .forEach { d ->
+                val titulo = if (d.esVacaciones) "Tienes vacaciones" else "Tienes un asueto"
+                val fechas = (if (d.desde == d.hasta) fechaLegible(d.desde) else
+                    "${fechaLegible(d.desde)} al ${fechaLegible(d.hasta).lowercase()}") + " (${textoDiasLaborales(d.dias)})"
+                Notificaciones.mostrar(
+                    getApplication(), 900 + (d.id.hashCode() and 0x7fffffff) % 1000,
+                    "🌴 $titulo", "$fechas. Míralo en Permisos.",
+                )
+                // También en la tarjeta "Novedades", por si no vio la notificación.
+                agregarNovedad(Novedad("libre-${d.id}", "🌴", titulo, "$fechas." + if (d.detalle.isNotBlank()) " ${d.detalle}" else ""))
+            }
+    }
+
     /** Notificación al llegar a 3, 5, 7, 10, 15, 20, 30… llegadas puntuales seguidas. */
     private fun avisarLogroDeRacha(racha: Int) {
         val logro = racha in setOf(3, 5, 7, 10, 15, 20) || (racha >= 30 && racha % 10 == 0)
         if (!logro) return
         val mejor = sesion.perfil.destacados?.takeIf { it.racha > 0 }
-        Notificaciones.mostrar(
-            getApplication(), 100 + racha,
-            "🔥 ¡Racha de $racha llegadas puntuales!",
-            "Sigue así, cada día puntual suma." +
-                if (mejor != null && racha >= mejor.racha) " ¡Ya alcanzas la mejor racha de la semana!"
-                else if (mejor != null) " La mejor racha de la semana es de ${mejor.racha} (${mejor.rachaNombre})." else "",
+        val texto = "Sigue así, cada día puntual suma." +
+            if (mejor != null && racha >= mejor.racha) " ¡Ya alcanzas la mejor racha de la semana!"
+            else if (mejor != null) " La mejor racha de la semana es de ${mejor.racha} (${mejor.rachaNombre})." else ""
+        Notificaciones.mostrar(getApplication(), 100 + racha, "🔥 ¡Racha de $racha llegadas puntuales!", texto)
+        agregarNovedad(
+            Novedad("racha-$racha-${claveDia(System.currentTimeMillis())}", "🔥", "¡Racha de $racha llegadas puntuales!", texto),
         )
     }
 
@@ -580,7 +671,7 @@ class AsistenciaViewModel(app: Application) : AndroidViewModel(app) {
             )
         }
         // Las horas de un permiso por horas cuentan para la meta.
-        val metaDia = dia?.meta ?: perfil.metaMinutos
+        val metaDia = dia?.meta ?: perfil.metaDelDia(marca.fechaHora)
         val textoMeta = formatoDuracion(metaDia.toLong())
         val faltan = metaDia - (dia?.minutosPermiso ?: 0) - trabajado
         if (faltan <= 0) {
@@ -589,7 +680,7 @@ class AsistenciaViewModel(app: Application) : AndroidViewModel(app) {
             return Resultado(
                 TipoResultado.META_CUMPLIDA,
                 "¡Cumpliste tu meta de $textoMeta!",
-                "Salida a las $hora. Estuviste ${formatoDuracion(trabajado)} en el colegio. ¡Buen trabajo!" +
+                "Salida a las $hora. Trabajaste ${formatoDuracion(trabajado)}. ¡Buen trabajo!" +
                     (if (extra > 0) "\n⏱ Horas extra hoy: ${formatoDuracion(extra)} (esta semana: ${formatoDuracion(semana)})." else ""),
                 nota,
             )
@@ -597,7 +688,7 @@ class AsistenciaViewModel(app: Application) : AndroidViewModel(app) {
         return Resultado(
             TipoResultado.META_INCOMPLETA,
             "No completaste la meta de $textoMeta",
-            "Salida a las $hora con ${formatoDuracion(trabajado)} en el colegio. Te faltaron ${formatoDuracion(faltan)}.",
+            "Salida a las $hora con ${formatoDuracion(trabajado)} trabajadas. Te faltaron ${formatoDuracion(faltan)}.",
             nota,
         )
     }
@@ -687,6 +778,7 @@ class AsistenciaViewModel(app: Application) : AndroidViewModel(app) {
                 _estado.update { it.copy(accesoCerrado = null) }
             }
             if (perfil != sesion.perfil) {
+                avisarVacacionesNuevas(sesion.perfil, perfil)
                 sesion.perfil = perfil
                 _estado.update { it.copy(perfil = perfil) }
             }
@@ -717,8 +809,10 @@ class AsistenciaViewModel(app: Application) : AndroidViewModel(app) {
                         _estado.update { it.copy(marcas = visibles()) }
                     }
             }
+            revisarResumenSemanal()
         } catch (e: IOException) {
             // Sin conexión o servidor sin configurar: queda pendiente.
+            revisarResumenSemanal()
         } catch (e: ServidorException) {
             if (e.accesoCerrado) {
                 // El administrador desactivó o eliminó a esta persona: se cierra el acceso a la app.

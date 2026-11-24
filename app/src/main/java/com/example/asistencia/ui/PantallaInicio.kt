@@ -44,6 +44,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.asistencia.R
 import com.example.asistencia.datos.Destacados
+import com.example.asistencia.datos.Jornada
+import com.example.asistencia.datos.Novedad
+import com.example.asistencia.datos.aMinutos
 import com.example.asistencia.datos.Perfil
 import com.example.asistencia.datos.Periodo
 import com.example.asistencia.datos.terminaDiaSiguiente
@@ -55,6 +58,9 @@ import com.example.asistencia.datos.formatoDuracionCorta
 import com.example.asistencia.datos.formatoHora
 import com.example.asistencia.datos.inicioDelDia
 import com.example.asistencia.datos.minutoDelDia
+import com.example.asistencia.datos.TipoEvento
+import com.example.asistencia.datos.claveDia
+import com.example.asistencia.datos.textoDiasLaborales
 import com.example.asistencia.ui.theme.Granate
 import com.example.asistencia.ui.theme.Rojo
 import com.example.asistencia.ui.theme.colorAviso
@@ -69,6 +75,8 @@ fun PantallaInicio(
     onReintentar: () -> Unit,
     onVerEstadisticas: () -> Unit,
     onMesRanking: (String) -> Unit,
+    onLeerNovedad: (String) -> Unit = {},
+    onLeerNovedades: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val perfil = estado.perfil
@@ -132,6 +140,15 @@ fun PantallaInicio(
 
         Reloj(perfil, ahora)
 
+        // Novedades: recordatorios de este momento y avisos guardados hasta tocar "Entendido".
+        TarjetaNovedades(estado.novedades, recordatoriosAhora(perfil, hoy, ahora), onLeerNovedad, onLeerNovedades)
+
+        // Vacaciones y asuetos que asignó la dirección: lo que está tomando y lo próximo (en los siguientes 30 días).
+        val claveHoy = claveDia(ahora)
+        val proximas = perfil.diasLibres.orEmpty()
+        val vacacionesHoy = proximas.firstOrNull { it.esVacaciones && claveHoy in it.desde..it.hasta }
+        val proxima = proximas.firstOrNull { it.desde > claveHoy && it.desde <= claveDia(ahora + 30 * 86_400_000L) }
+
         // Aviso del calendario: vacaciones, feriado, permiso o entrada especial.
         (perfil.diaLibre(ahora) ?: perfil.entradaEspecial(ahora) ?: perfil.permisosPorHoras(ahora).firstOrNull())?.let { e ->
             Tarjeta {
@@ -143,11 +160,29 @@ fun PantallaInicio(
                     Text(
                         when {
                             e.porHoras -> "Tienes permiso de ${e.horaInicio} a ${e.horaFin}; esas horas cuentan para tu meta. ${e.detalle}".trim()
+                            e.tipo == TipoEvento.VACACIONES && vacacionesHoy != null ->
+                                "Estás de vacaciones hasta el ${fechaLegible(vacacionesHoy.hasta).lowercase()}. " +
+                                    "Hoy no se espera que marques. ¡Que descanses!"
                             e.tipo.diaLibre -> "Hoy no se espera que marques. ${e.detalle}".trim()
                             else -> ("Hoy la entrada es a las ${e.horaEntrada}" +
                                 (if (e.horaSalida.isNotBlank()) " y la salida a las ${e.horaSalida}" else "") +
                                 ". ${e.detalle}").trim()
                         },
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+            }
+        }
+        proxima?.let { t ->
+            Tarjeta {
+                Column(Modifier.padding(16.dp)) {
+                    Text(
+                        if (t.esVacaciones) "🌴 Próximas vacaciones" else "🌴 Próximo asueto",
+                        style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.secondary,
+                    )
+                    Text(
+                        (if (t.desde == t.hasta) fechaLegible(t.desde) else "${fechaLegible(t.desde)} al ${fechaLegible(t.hasta).lowercase()}") +
+                            " · ${textoDiasLaborales(t.dias)}. Los demás están en Permisos.",
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 }
@@ -171,7 +206,7 @@ fun PantallaInicio(
                     Dato("Horas", if (hoy?.entrada != null) formatoDuracionCorta(trabajado) else "—", Modifier.weight(1f))
                 }
                 if (hoy?.entrada != null) {
-                    MetaDelDia(trabajado + (hoy?.minutosPermiso ?: 0), hoy?.meta ?: perfil.metaMinutos, terminada = hoy?.salida != null)
+                    MetaDelDia(trabajado + (hoy?.minutosPermiso ?: 0), hoy?.meta ?: perfil.metaDelDia(ahora), terminada = hoy?.salida != null)
                 }
                 val extra = hoy?.minutosExtra(ahora) ?: 0
                 if (extra > 0) {
@@ -430,6 +465,95 @@ private fun MiniDato(valor: String, etiqueta: String, modifier: Modifier) {
                 minLines = 2,
                 maxLines = 2,
             )
+        }
+    }
+}
+
+// ---------- Novedades ----------
+
+/** Recordatorio de este momento (no se guarda: aparece mientras sirve). */
+private data class RecordatorioAhora(val icono: String, val titulo: String, val texto: String)
+
+/**
+ * Los mismos recordatorios que llegan como notificación, mientras la app está abierta: entrada en 15 minutos, entrada
+ * sin marcar (15 minutos después de la tolerancia) y salida en 10 minutos.
+ */
+private fun recordatoriosAhora(perfil: Perfil, turno: Jornada?, ahora: Long): List<RecordatorioAhora> {
+    if (!perfil.marca) return emptyList()
+    val lista = mutableListOf<RecordatorioAhora>()
+    val hoy = inicioDelDia(ahora)
+    val minuto = minutoDelDia(ahora)
+    val entrada = aMinutos(perfil.horaEntrada(hoy))
+    var salida = aMinutos(perfil.horaSalida(hoy))
+    if (salida <= entrada) salida += 24 * 60
+    val trabaja = perfil.horario.trabaja(hoy) || perfil.entradaEspecial(hoy) != null
+    val enCurso = turno?.enCurso(ahora) == true
+    if (trabaja && perfil.diaLibre(hoy) == null && !enCurso && !(turno?.dia == hoy && turno.entrada != null)) {
+        if (minuto in (entrada - 15) until entrada) {
+            lista += RecordatorioAhora(
+                "⏰",
+                if (perfil.entradaEspecial(hoy) != null) "En ${entrada - minuto} minutos: entrada especial" else "Tu entrada es en ${entrada - minuto} minutos",
+                "Entras a las ${horaAmigable(perfil.horaEntrada(hoy))} y sales a las ${horaAmigable(perfil.horaSalida(hoy))}. " +
+                    "¡Llega puntual y mantén tu racha!",
+            )
+        } else if (minuto >= entrada + perfil.tolerancia + 15 && minuto < salida) {
+            lista += RecordatorioAhora(
+                "⚠️", "Aún no registras tu entrada",
+                "Ya pasó tu hora de entrada (${horaAmigable(perfil.horaEntrada(hoy))}). Marca en cuanto llegues; si estás en " +
+                    "una actividad fuera del colegio, usa \"Actividad especial\".",
+            )
+        }
+    }
+    if (turno != null && enCurso) {
+        val salidaTurno = aMinutos(perfil.horaSalida(turno.dia))
+        var fin = turno.dia + salidaTurno * 60_000L
+        if (salidaTurno <= aMinutos(perfil.horaEntrada(turno.dia))) fin += 86_400_000L // salida del día siguiente
+        val faltanMin = ((fin - ahora + 59_999) / 60_000).toInt()
+        if (faltanMin in 1..10) {
+            val alSalir = turno.minutosTrabajados(fin) ?: 0
+            val faltan = turno.meta - turno.minutosPermiso - alSalir
+            lista += RecordatorioAhora(
+                "🏁", "Tu salida es en $faltanMin minutos",
+                "A las ${horaAmigable(perfil.horaSalida(turno.dia))} llevarás ${formatoDuracion(alSalir)}. " +
+                    if (faltan <= 0) "Cumplirás tu meta del día. No olvides marcar tu salida."
+                    else "Te faltarán ${formatoDuracion(faltan)} para tu meta del día.",
+            )
+        }
+    }
+    return lista
+}
+
+/** Tarjeta "Novedades" de Inicio (no se muestra si no hay nada). */
+@Composable
+private fun TarjetaNovedades(
+    novedades: List<Novedad>,
+    recordatorios: List<RecordatorioAhora>,
+    onLeer: (String) -> Unit,
+    onLeerTodas: () -> Unit,
+) {
+    if (novedades.isEmpty() && recordatorios.isEmpty()) return
+    Tarjeta {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "🔔 Novedades", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.secondary,
+                    modifier = Modifier.weight(1f),
+                )
+                if (novedades.size > 1) TextButton(onClick = onLeerTodas) { Text("Marcar todas") }
+            }
+            val fila = @Composable { icono: String, titulo: String, texto: String, id: String? ->
+                Row(verticalAlignment = Alignment.Top) {
+                    Text(icono, fontSize = 20.sp)
+                    Spacer(Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(titulo, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                        Text(texto, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (id != null) TextButton(onClick = { onLeer(id) }) { Text("Entendido") }
+                    }
+                }
+            }
+            recordatorios.forEach { fila(it.icono, it.titulo, it.texto, null) }
+            novedades.forEach { fila(it.icono, it.titulo, it.texto, it.id) }
         }
     }
 }

@@ -82,6 +82,10 @@ import com.example.asistencia.datos.Rol
 import com.example.asistencia.datos.TipoEvento
 import com.example.asistencia.datos.aMinutos
 import com.example.asistencia.datos.claveDia
+import com.example.asistencia.datos.HORAS_ANTES_DEL_ALMUERZO
+import com.example.asistencia.datos.VistaVacaciones
+import com.example.asistencia.datos.textoDiasLaborales
+import kotlinx.coroutines.delay
 import com.example.asistencia.ui.theme.colorAviso
 import com.example.asistencia.ui.theme.colorExito
 import java.text.SimpleDateFormat
@@ -335,6 +339,16 @@ private fun SeccionMiembros(estado: EstadoAdmin, vm: AdminViewModel, editable: B
     }
 }
 
+/** Cuántos días laborales son unas vacaciones para una persona y si ya tiene vacaciones en esas fechas (del servidor). */
+@Composable
+fun VistaVacacionesTexto(v: VistaVacaciones, conNombre: Boolean) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        if (conNombre) Text(v.nombre, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+        Text(textoDiasLaborales(v.dias), style = MaterialTheme.typography.bodySmall)
+        v.avisos.forEach { a -> Text("⚠️ $a", style = MaterialTheme.typography.bodySmall, color = colorAviso) }
+    }
+}
+
 private fun nombreHorario(horarios: List<Horario>, codigo: String) =
     horarios.firstOrNull { it.codigo == codigo }?.let { "${it.nombre} (${horaAmigable(it.entrada)} – ${horaAmigable(it.salida)}, ${it.textoDias})" }
         ?: codigo
@@ -482,6 +496,10 @@ private fun SeccionJornadas(estado: EstadoAdmin, vm: AdminViewModel, meta: Int) 
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Text("Días: ${h.textoDias}", style = MaterialTheme.typography.bodySmall)
+                Text(
+                    if (h.almuerzo > 0) "Almuerzo: ${formatoDuracion(h.almuerzo.toLong())} (no cuenta como trabajo)" else "Sin almuerzo (jornada continua)",
+                    style = MaterialTheme.typography.bodySmall,
+                )
                 h.porDia.toSortedMap().filterKeys { it in h.dias }.forEach { (d, hd) ->
                     Text(
                         "${NOMBRES_DIAS[d]}: ${horaAmigable(hd.entrada)} – ${horaAmigable(hd.salida)}" +
@@ -505,10 +523,13 @@ private fun SeccionJornadas(estado: EstadoAdmin, vm: AdminViewModel, meta: Int) 
 }
 
 @Composable
-private fun DialogoJornada(original: Horario?, meta: Int, onCerrar: () -> Unit, onGuardar: (Horario) -> Unit) {
+private fun DialogoJornada(original: Horario?, metaColegio: Int, onCerrar: () -> Unit, onGuardar: (Horario) -> Unit) {
+    // Minutos de almuerzo: no cuentan como trabajo. La salida se calcula con la meta más el almuerzo.
+    var almuerzo by remember { mutableStateOf(original?.almuerzo ?: 0) }
+    val meta = metaColegio + almuerzo
     // La salida se calcula sola: entrada + meta del colegio (p. ej. 18:00 + 8 h = 02:00 del día siguiente).
     var salidaAuto by remember {
-        mutableStateOf(original == null || original.salida == sumarMinutos(original.entrada, meta))
+        mutableStateOf(original == null || original.salida == sumarMinutos(original.entrada, metaColegio + original.almuerzo))
     }
     var nombre by remember { mutableStateOf(original?.nombre.orEmpty()) }
     var entrada by remember { mutableStateOf(original?.entrada.orEmpty()) }
@@ -544,10 +565,29 @@ private fun DialogoJornada(original: Horario?, meta: Int, onCerrar: () -> Unit, 
                         salidaAuto = HORA_VALIDA.matches(entrada) && it == sumarMinutos(entrada, meta)
                     }
                 }
+                Text("Almuerzo (no cuenta como trabajo)", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    (listOf(0, 30, 45, 60, 90, 120) + listOf(almuerzo).filter { it !in listOf(0, 30, 45, 60, 90, 120) }).forEach { min ->
+                        FilterChip(
+                            selected = almuerzo == min,
+                            onClick = {
+                                almuerzo = min
+                                if (salidaAuto && HORA_VALIDA.matches(entrada)) salida = sumarMinutos(entrada, metaColegio + min)
+                            },
+                            label = { Text(if (min == 0) "Sin almuerzo" else formatoDuracion(min.toLong())) },
+                        )
+                    }
+                }
+                Text(
+                    "Cada quien almuerza a la hora que puede: se descuenta solo a quien pasa de $HORAS_ANTES_DEL_ALMUERZO horas en " +
+                        "el colegio, y solo en días de más de $HORAS_ANTES_DEL_ALMUERZO horas.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 val textoMeta = formatoDuracion(meta.toLong())
                 if (salidaAuto) {
                     Text(
-                        "La salida se calcula sola: entrada + $textoMeta (la meta del colegio). Puedes cambiarla si lo necesitas.",
+                        "La salida se calcula sola: entrada + $textoMeta (la meta del colegio" +
+                            (if (almuerzo > 0) " más el almuerzo" else "") + "). Puedes cambiarla si lo necesitas.",
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 } else if (HORA_VALIDA.matches(entrada)) {
@@ -555,7 +595,7 @@ private fun DialogoJornada(original: Horario?, meta: Int, onCerrar: () -> Unit, 
                         Text("Calcular salida con $textoMeta")
                     }
                 }
-                AvisoHorario(entrada, salida)
+                AvisoHorario(entrada, salida, almuerzo)
                 Text("Días laborales", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     LETRAS_DIAS.forEach { (n, letra) ->
@@ -591,11 +631,12 @@ private fun DialogoJornada(original: Horario?, meta: Int, onCerrar: () -> Unit, 
                             }
                             SelectorHora(h.salida, "Salida", Modifier.weight(1f)) { porDia = porDia + (d to h.copy(salida = it)) }
                         }
-                        AvisoHorario(h.entrada, h.salida)
+                        AvisoHorario(h.entrada, h.salida, almuerzo)
                     }
                 }
                 Text(
-                    "Cada día se pide la meta del colegio o lo que dure su horario, si es menos. Lo que pase de la meta suma como horas extra.",
+                    "Cada día se pide la meta del colegio o lo que dure su horario sin el almuerzo, si es menos. Lo que pase de " +
+                        "la meta suma como horas extra.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -605,7 +646,7 @@ private fun DialogoJornada(original: Horario?, meta: Int, onCerrar: () -> Unit, 
                 // Solo se guardan los días que de verdad son distintos al horario general.
                 val distintos = if (!distintoPorDia) emptyMap()
                 else dias.associateWith { horaDe(it) }.filterValues { it != HoraDia(entrada, salida) }
-                onGuardar(Horario(original?.codigo.orEmpty(), nombre.trim(), entrada, salida, dias.sorted(), distintos))
+                onGuardar(Horario(original?.codigo.orEmpty(), nombre.trim(), entrada, salida, dias.sorted(), distintos, almuerzo))
             }) { Text("Guardar") }
         },
         dismissButton = { TextButton(onClick = onCerrar) { Text("Cancelar") } },
@@ -619,19 +660,26 @@ private fun sumarMinutos(hora: String, minutos: Int): String {
     return "%02d:%02d".format(total / 60, total % 60)
 }
 
-/** Avisa si el horario termina al día siguiente (turno nocturno) o si entrada y salida son iguales. */
+/**
+ * Avisa si el horario termina al día siguiente (turno nocturno) o si entrada y salida son iguales, y cuánto se
+ * trabaja sin el almuerzo (que solo se descuenta en días de más de 6 horas).
+ */
 @Composable
-private fun AvisoHorario(entrada: String, salida: String) {
+private fun AvisoHorario(entrada: String, salida: String, almuerzo: Int = 0) {
     if (!HORA_VALIDA.matches(entrada) || !HORA_VALIDA.matches(salida)) return
+    val total = duracionHorario(entrada, salida)
+    val sinAlmuerzo = if (almuerzo > 0 && total > HORAS_ANTES_DEL_ALMUERZO * 60) {
+        ", ${formatoDuracion((total - almuerzo).toLong())} de trabajo sin el almuerzo"
+    } else ""
     when {
         aMinutos(entrada) == aMinutos(salida) ->
             Text("La salida no puede ser a la misma hora que la entrada.", style = MaterialTheme.typography.bodySmall, color = colorAviso)
         terminaDiaSiguiente(entrada, salida) -> Text(
-            "Termina al día siguiente (turno nocturno): ${formatoDuracion(duracionHorario(entrada, salida).toLong())}.",
+            "Termina al día siguiente (turno nocturno): ${formatoDuracion(total.toLong())}$sinAlmuerzo.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary,
         )
         else -> Text(
-            "Duración: ${formatoDuracion(duracionHorario(entrada, salida).toLong())}.",
+            "Duración: ${formatoDuracion(total.toLong())}$sinAlmuerzo.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
@@ -818,7 +866,7 @@ private fun SeccionCalendario(estado: EstadoAdmin, vm: AdminViewModel) {
         val marcan = estado.miembros.orEmpty().filter { m ->
             m.activo && estado.roles.firstOrNull { it.codigo == m.rol }?.marca != false
         }
-        DialogoEvento(marcan, onCerrar = { agregando = false }) {
+        DialogoEvento(marcan, vista = vm::vistaVacaciones, onCerrar = { agregando = false }) {
             vm.agregarEvento(it)
             agregando = false
         }
@@ -882,7 +930,12 @@ fun fechaLegible(clave: String): String =
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun DialogoEvento(miembros: List<Miembro>, onCerrar: () -> Unit, onAgregar: (Evento) -> Unit) {
+private fun DialogoEvento(
+    miembros: List<Miembro>,
+    vista: suspend (aplicaA: String, desde: String, hasta: String) -> List<VistaVacaciones>,
+    onCerrar: () -> Unit,
+    onAgregar: (Evento) -> Unit,
+) {
     val hoy = claveDia(System.currentTimeMillis())
     var tipo by remember { mutableStateOf(TipoEvento.VACACIONES) }
     var desde by remember { mutableStateOf(hoy) }
@@ -897,6 +950,14 @@ private fun DialogoEvento(miembros: List<Miembro>, onCerrar: () -> Unit, onAgreg
     var horaSalida by remember { mutableStateOf("") }
     var detalle by remember { mutableStateOf("") }
     var eligiendo by remember { mutableStateOf<String?>(null) } // "desde" | "hasta"
+    // Vacaciones: cuántos días laborales son y si alguien ya tiene vacaciones en esas fechas, antes de guardar.
+    var vistas by remember { mutableStateOf<List<VistaVacaciones>?>(null) }
+    LaunchedEffect(tipo, desde, hasta, paraTodos, elegidos) {
+        vistas = null
+        if (tipo != TipoEvento.VACACIONES || (!paraTodos && elegidos.isEmpty())) return@LaunchedEffect
+        delay(400) // espera a que termine de elegir
+        vistas = vista(if (paraTodos) "Todos" else elegidos.joinToString(", "), desde, hasta)
+    }
 
     eligiendo?.let { cual ->
         // El selector trabaja con medianoche UTC.
@@ -1018,6 +1079,32 @@ private fun DialogoEvento(miembros: List<Miembro>, onCerrar: () -> Unit, onAgreg
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                    }
+                }
+
+                if (tipo == TipoEvento.VACACIONES && (paraTodos || elegidos.isNotEmpty())) {
+                    Spacer(Modifier.height(4.dp))
+                    val lista = vistas
+                    when {
+                        lista == null -> Text(
+                            "Contando días laborales…",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        lista.isEmpty() -> Unit
+                        paraTodos -> {
+                            // Todo el personal: los días (con la jornada de la primera persona) y solo quienes tienen avisos.
+                            Text(
+                                "Son ${textoDiasLaborales(lista.first().dias)} con la jornada de ${lista.first().nombre} " +
+                                    "(puede variar según la jornada de cada persona).",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            val conAvisos = lista.filter { v -> v.avisos.isNotEmpty() }
+                            conAvisos.take(8).forEach { VistaVacacionesTexto(it, conNombre = true) }
+                            if (conAvisos.size > 8) {
+                                Text("Y ${conAvisos.size - 8} persona(s) más con avisos.", style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                        else -> lista.forEach { VistaVacacionesTexto(it, conNombre = lista.size > 1) }
                     }
                 }
 

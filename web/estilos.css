@@ -180,7 +180,12 @@ textarea { resize: vertical; min-height: 70px; }
   display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: .72rem;
   padding: 6px 12px; border-radius: 14px; cursor: pointer; flex: 1;
 }
-.pestanas button .icono { font-size: 1.3rem; line-height: 1; }
+.pestanas button .icono { font-size: 1.3rem; line-height: 1; position: relative; }
+/* Puntito rojo: hay novedades sin leer. */
+.punto-aviso {
+  position: absolute; top: -2px; right: -6px; width: 9px; height: 9px; border-radius: 50%;
+  background: var(--rojo); border: 2px solid var(--superficie-2);
+}
 .pestanas button.activa { color: var(--rojo); font-weight: 600; }
 
 /* Avisos y diálogos */
