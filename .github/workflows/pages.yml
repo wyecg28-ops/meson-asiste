@@ -1,5 +1,9 @@
 # Mesón Asiste — Creado por 31YC0ND3. Licencia Apache 2.0.
 # Publica la carpeta web/ en GitHub Pages cada vez que se suben cambios a la rama main.
+#
+# Va en dos etapas (preparar y publicar), como la plantilla oficial de GitHub. A veces GitHub todavía no encuentra el
+# paquete recién subido ("No artifacts named github-pages were found"): por eso, si la publicación falla, espera y
+# lo vuelve a intentar sola (hasta dos veces más) en vez de dejar la web sin actualizar.
 name: Publicar versión web
 
 on:
@@ -13,21 +17,39 @@ permissions:
   pages: write
   id-token: write
 
+# Una publicación a la vez; si llega otra mientras tanto, espera (no se cancela la que está en curso).
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
-  publicar:
+  preparar:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.despliegue.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
           path: web
-      - id: despliegue
+
+  publicar:
+    needs: preparar
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.intento3.outputs.page_url || steps.intento2.outputs.page_url || steps.intento1.outputs.page_url }}
+    steps:
+      - id: intento1
+        uses: actions/deploy-pages@v4
+        continue-on-error: true
+      - if: steps.intento1.outcome == 'failure'
+        run: sleep 30
+      - id: intento2
+        if: steps.intento1.outcome == 'failure'
+        uses: actions/deploy-pages@v4
+        continue-on-error: true
+      - if: steps.intento2.outcome == 'failure'
+        run: sleep 60
+      - id: intento3
+        if: steps.intento2.outcome == 'failure'
         uses: actions/deploy-pages@v4
