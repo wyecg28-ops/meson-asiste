@@ -376,6 +376,7 @@ function perfil(u, d) {
     tolerancia: config.tolerancia,
     horasMeta: config.horasMeta,
     sedes: leerSedes().map(sedeJson),
+    margenGps: CONFIG.MARGEN_GPS_METROS,
     eventos: eventos.filter(e => aplicaA(e, u.correo) && e.hasta >= desde),
     // Sus vacaciones y asuetos próximos, tal como los puso la administración (también los asignados sin solicitud).
     diasLibres: marcaAsistencia(u.rol) ? proximosDiasLibres(u, eventos) : undefined,
@@ -779,7 +780,10 @@ function validarUbicacion(tieneUbicacion, precisionRecibida, sede, distancia, fu
   if (precision > CONFIG.PRECISION_MAXIMA) {
     throw new Error('La señal GPS es imprecisa (±' + precision + ' m). Intenta de nuevo en un lugar abierto.');
   }
-  if (sede && distancia > sede.radio) {
+  // Margen de error del GPS: si la lectura cae un poco fuera pero su margen alcanza a cubrir el colegio, se acepta
+  // (hasta CONFIG.MARGEN_GPS_METROS).
+  const margen = Math.min(Math.max(0, precision || 0), CONFIG.MARGEN_GPS_METROS);
+  if (sede && distancia > sede.radio + margen) {
     throw new Error('Estás a ' + distancia + ' m de ' + sede.nombre + '. Debes marcar dentro del establecimiento ' +
       '(o usar "Actividad especial" si estás en una).');
   }

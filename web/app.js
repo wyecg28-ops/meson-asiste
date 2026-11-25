@@ -125,6 +125,12 @@ class ErrorServidor extends Error {
 }
 class SinConexion extends Error {}
 
+/**
+ * Máximo que se espera al servidor antes de dar la conexión por perdida (ms): al marcar, poco (si no responde, la
+ * marca se guarda en el teléfono y se envía sola después); los reportes del panel pueden tardar más.
+ */
+const limiteRed = accion => accion === 'registrar' ? 20000 : accion.indexOf('admin') === 0 ? 90000 : 45000;
+
 // ---------------------------------------------------------------- Reloj propio
 //
 // La hora de una marca no se toma del reloj del teléfono (la persona lo puede atrasar), sino de la hora del servidor
@@ -157,11 +163,19 @@ async function api(accion, extra, correo) {
   }, extra || {});
   let r;
   const antes = performance.now();
+  // Sin red: ni se intenta (la marca se guarda en el teléfono al momento y se envía sola después).
+  if (navigator.onLine === false) throw new SinConexion('Sin conexión a internet.');
+  // Con señal mala o un Wi-Fi sin internet, el iPhone puede quedarse esperando minutos: se corta antes.
+  const corte = typeof AbortController === 'function' ? new AbortController() : null;
+  const temporizador = corte ? setTimeout(() => corte.abort(), limiteRed(accion)) : null;
   try {
     // text/plain evita la consulta previa (CORS) que Apps Script no responde.
-    r = await fetch(CONFIG.SCRIPT_URL, { method: 'POST', body: JSON.stringify(cuerpo), headers: { 'Content-Type': 'text/plain;charset=utf-8' } });
+    r = await fetch(CONFIG.SCRIPT_URL, { method: 'POST', body: JSON.stringify(cuerpo), headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      signal: corte ? corte.signal : undefined });
   } catch (e) {
     throw new SinConexion('Sin conexión con el servidor.');
+  } finally {
+    if (temporizador) clearTimeout(temporizador);
   }
   if (!r.ok) throw new SinConexion('El servidor no respondió (' + r.status + ').');
   let j;
@@ -557,10 +571,14 @@ function sedeCercana(l) {
   return mejor;
 }
 
-/** ¿El servidor la aceptaría? Margen aceptable y dentro del radio de la sede más cercana (si hay sedes). */
+/**
+ * ¿El servidor la aceptaría? Margen aceptable y dentro del radio de la sede más cercana (si hay sedes), contando el
+ * margen de error del GPS hasta 30 m (igual que el servidor).
+ */
 function dentroDelRango(l) {
   const c = sedeCercana(l);
-  return l.precision <= PRECISION_MAXIMA && (!c || c.distancia <= c.sede.radio);
+  const margen = Math.min(Math.max(0, l.precision || 0), perfil().margenGps || 30);
+  return l.precision <= PRECISION_MAXIMA && (!c || c.distancia <= c.sede.radio + margen);
 }
 
 /** ¿Ya se puede dejar de esperar? Dentro del rango, o tan precisa que ya es confiable (aunque esté fuera). */

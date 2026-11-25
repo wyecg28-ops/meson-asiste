@@ -57,6 +57,10 @@ const CONFIG = {
   DIAS_MAXIMOS_PENDIENTE: 3,
   // Se rechazan lecturas GPS con un margen de error mayor a este valor (metros).
   PRECISION_MAXIMA: 100,
+  // El GPS de los teléfonos (sobre todo iPhone dentro de un edificio) se equivoca 20 a 60 m. Se acepta una lectura
+  // fuera del radio del colegio si su margen de error alcanza a cubrirlo, hasta este máximo (metros). Así quien está
+  // en el colegio no queda "a 45 m" por error del GPS, y nadie puede marcar desde lejos. La web usa el mismo valor.
+  MARGEN_GPS_METROS: 30,
   // Pestaña "Bitácora": anota cada acción del personal (marcas, permisos, cambios de administración) y los errores.
   // Útil para pruebas y auditoría. false = no se anota nada.
   BITACORA: true,
